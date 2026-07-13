@@ -58,6 +58,7 @@ Create a `.env` (or `.env.local` for Next.js) with the following keys:
 NEXT_PUBLIC_OPENAI_API_KEY=your_openai_key
 NEXT_PUBLIC_GEMINI_API_KEY=your_gemini_key
 MONGODB_URI=mongodb://localhost:27017/neurolens
+SPRING_MONGODB_URI=mongodb://localhost:27017/neurodb
 ```
 Do **not** commit this file; it is listed in `.gitignore`.
 
