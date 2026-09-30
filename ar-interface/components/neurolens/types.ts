@@ -7,6 +7,7 @@ export interface Person {
   lastLocation: string
   tags: string[]
   memories: Memory[]
+  notes?: string
 }
 
 export interface Memory {

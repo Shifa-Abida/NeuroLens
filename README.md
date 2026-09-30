@@ -26,7 +26,7 @@ The full tech‑stack is documented in **[TECH_STACK.md](TECH_STACK.md)**, but t
 ## 🚀 Getting Started
 ### Prerequisites
 - **Node.js** (v20 or later) and **npm** (or pnpm) installed
-- **Java 21** and **Maven** installed
+- **Java 25** and **Maven** installed
 - **MongoDB** instance running locally or remotely
 - An **OpenAI** or **Gemini** API key (set in environment variables)
 
@@ -53,14 +53,20 @@ pnpm dev   # starts Next.js on http://localhost:3000
 ```
 
 ### Environment variables
-Create a `.env` (or `.env.local` for Next.js) with the following keys:
+Configure frontend keys in `.env.local`. Set the Spring Boot MongoDB URI in the backend process environment; Spring Boot reads `SPRING_MONGODB_URI` and falls back to local MongoDB when it is unset.
+
+For Atlas, use the URI from Atlas **Connect → Drivers**, replace its placeholders locally, and allow your client IP in the Atlas network access list:
 ```
 NEXT_PUBLIC_OPENAI_API_KEY=your_openai_key
 NEXT_PUBLIC_GEMINI_API_KEY=your_gemini_key
-MONGODB_URI=mongodb://localhost:27017/neurolens
-SPRING_MONGODB_URI=mongodb://localhost:27017/neurodb
+SPRING_MONGODB_URI=mongodb+srv://<db-user>:<db-password>@<cluster-host>/neurodb?retryWrites=true&w=majority
 ```
-Do **not** commit this file; it is listed in `.gitignore`.
+Never commit the Atlas URI or share it publicly. For PowerShell, set it in the backend terminal before starting the API:
+
+```powershell
+$env:SPRING_MONGODB_URI = 'mongodb+srv://<db-user>:<db-password>@<cluster-host>/neurodb?retryWrites=true&w=majority'
+./mvnw.cmd spring-boot:run
+```
 
 ---
 

@@ -376,11 +376,33 @@ export function ARView() {
         const script = document.createElement('script')
         script.src = src
         script.async = true
-        script.onload = () => resolve()
-        script.onerror = () => reject(new Error(`Failed to load ${src}`))
+        const timeout = window.setTimeout(() => {
+          script.remove()
+          reject(new Error(`Timed out loading ${src}`))
+        }, 30000)
+        script.onload = () => {
+          window.clearTimeout(timeout)
+          resolve()
+        }
+        script.onerror = () => {
+          window.clearTimeout(timeout)
+          reject(new Error(`Failed to load ${src}`))
+        }
         document.body.appendChild(script)
       })
     }
+
+    const waitForModel = (promise: Promise<unknown>, name: string): Promise<void> =>
+      new Promise((resolve, reject) => {
+        const timeout = window.setTimeout(() => reject(new Error(`Timed out downloading ${name}`)), 60000)
+        promise.then(() => {
+          window.clearTimeout(timeout)
+          resolve()
+        }, (err) => {
+          window.clearTimeout(timeout)
+          reject(err)
+        })
+      })
 
     const loadLibraries = async () => {
       try {
@@ -402,7 +424,7 @@ export function ARView() {
       } catch (err) {
         console.error("Failed to load libraries", err)
         if (isMounted) {
-          setError("Failed to load required vision CDN scripts.")
+          setError(err instanceof Error ? err.message : "Failed to load required vision resources.")
           setSystemStatus("CDN Load Error")
         }
       }
@@ -417,9 +439,12 @@ export function ARView() {
         const modelUrl = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.0.1/model/'
         
         // Load faceapi models
-        await faceapi.nets.ssdMobilenetv1.loadFromUri(modelUrl)
-        await faceapi.nets.faceLandmark68Net.loadFromUri(modelUrl)
-        await faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl)
+        setSystemStatus("Downloading face detection model...")
+        await waitForModel(faceapi.nets.ssdMobilenetv1.loadFromUri(modelUrl), "face detection model")
+        setSystemStatus("Downloading facial landmark model...")
+        await waitForModel(faceapi.nets.faceLandmark68Net.loadFromUri(modelUrl), "facial landmark model")
+        setSystemStatus("Downloading face recognition model...")
+        await waitForModel(faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl), "face recognition model")
 
         // Initialize MediaPipe Hands
         if (Hands) {
@@ -445,7 +470,7 @@ export function ARView() {
       } catch (err) {
         console.error("Failed to initialize models", err)
         if (isMounted) {
-          setError("Failed to initialize vision models.")
+          setError(err instanceof Error ? err.message : "Failed to initialize vision models.")
           setSystemStatus("Model Init Error")
         }
       }
@@ -1076,9 +1101,9 @@ export function ARView() {
 
   return (
     <div 
-      className="fixed inset-0 flex flex-col bg-[#02040a] text-white font-sans overflow-hidden select-none"
+      className="ar-screen fixed inset-0 flex flex-col bg-[#02040a] text-white font-sans overflow-hidden select-none"
       style={{ 
-        background: 'radial-gradient(circle at 80% 20%, rgba(139, 92, 246, 0.16) 0%, transparent 50%), radial-gradient(circle at 15% 85%, rgba(16, 185, 129, 0.12) 0%, transparent 45%), radial-gradient(circle at 50% 50%, rgba(59, 130, 246, 0.08) 0%, transparent 60%), #02040a' 
+        background: 'radial-gradient(ellipse at 10% 34%, rgba(34, 211, 238, 0.38) 0%, transparent 43%), radial-gradient(ellipse at 77% 24%, rgba(139, 92, 246, 0.34) 0%, transparent 40%), radial-gradient(ellipse at 94% 76%, rgba(59, 130, 246, 0.28) 0%, transparent 38%), radial-gradient(ellipse at 48% 96%, rgba(45, 212, 191, 0.16) 0%, transparent 42%), #02040a'
       }}
     >
       
@@ -1128,11 +1153,30 @@ export function ARView() {
       <div className="flex-grow flex p-6 gap-6 overflow-hidden min-h-0 relative z-10">
         {!isFaceApiLoaded ? (
           <div className="flex-1 flex flex-col items-center justify-center space-y-6 py-12">
-            <div className="w-16 h-16 border-4 border-blue-500/20 border-t-blue-400 rounded-full animate-spin" />
-            <div className="text-center space-y-2">
-              <h3 className="text-xl font-bold">Starting NeuroLens Vision</h3>
-              <p className="text-sm text-slate-400">Downloading localized facial landmark networks...</p>
-            </div>
+            {error ? (
+              <div className="max-w-lg space-y-4 text-center" role="alert">
+                <AlertCircle className="mx-auto size-10 text-rose-400" />
+                <div className="space-y-2">
+                  <h3 className="text-xl font-bold">Vision startup failed</h3>
+                  <p className="text-sm text-slate-400">{error}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  className="rounded-full bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-500"
+                >
+                  Retry vision startup
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="w-16 h-16 border-4 border-blue-500/20 border-t-blue-400 rounded-full animate-spin" />
+                <div className="text-center space-y-2">
+                  <h3 className="text-xl font-bold">Starting NeuroLens Vision</h3>
+                  <p className="text-sm text-slate-400">{systemStatus}</p>
+                </div>
+              </>
+            )}
           </div>
         ) : (
           <>
