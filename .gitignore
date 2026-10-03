@@ -1,0 +1,31 @@
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Environment / secret files — NEVER commit
+.env
+.env.*
+.env.local
+.env.production
+*.env
+
+# Uploaded media (user photos, recorded videos)
+media_storage/
+
+# Node
+node_modules/
+.next/
+
+# Java / Spring Boot
+target/
+*.jar
+*.war
+
+# Logs
+*.log

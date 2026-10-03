@@ -32,6 +32,14 @@ build/
 ### VS Code ###
 .vscode/
 
-# Ignore application.properties
+# Ignore application.properties (contains MongoDB URI)
 /src/main/resources/application.properties
+
+# Uploaded media files (user photos, recorded videos) — never push to repo
+media_storage/
+
+# Environment / secret files
+.env
+.env.*
+*.env
 

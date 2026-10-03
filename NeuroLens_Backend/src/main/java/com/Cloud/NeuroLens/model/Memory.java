@@ -17,11 +17,28 @@ public class Memory {
 
     @Id
     private String id;
+
+    @Indexed
+    private String clientId;
+
     @Indexed
     private String personId;
+
+    private String personName;
+    private String relationship;
+
     private String title;
     private String description;
     private String emotion;
+
+    private String videoUrl;
+    private Integer duration;
+
+    private String type; // e.g. "VIDEO", "INTERACTION_VIDEO"
+    private String status; // e.g. "SAVED"
+
     @Indexed
     private LocalDateTime timestamp;
+
+    private String createdAt;
 }

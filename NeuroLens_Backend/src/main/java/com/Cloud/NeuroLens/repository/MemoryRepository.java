@@ -7,12 +7,13 @@ import org.springframework.stereotype.Repository;
 import java.util.List;
 
 @Repository
-public interface MemoryRepository
-        extends MongoRepository<Memory, String> {
+public interface MemoryRepository extends MongoRepository<Memory, String> {
 
     List<Memory> findByPersonId(String personId);
 
+    List<Memory> findByPersonIdOrderByTimestampDesc(String personId);
 
-    List<Memory> findByPersonIdOrderByTimestampDesc(
-            String personId);
+    List<Memory> findByClientIdOrderByTimestampDesc(String clientId);
+
+    List<Memory> findAllByOrderByTimestampDesc();
 }

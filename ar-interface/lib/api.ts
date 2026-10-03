@@ -3,33 +3,53 @@ import type { Memory, Person } from "@/components/neurolens/types"
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8080"
 
-type ApiPerson = {
+export type ApiPerson = {
   id: string
+  personId?: string
+  clientId?: string
   name: string
   relationship: string
   photoUrl?: string
+  profilePhotoUrl?: string
   faceId?: string
   notes?: string
+  trusted?: boolean
+  firstSeen?: string
+  lastSeen?: string
+  timesSeen?: number
+  createdAt?: string
 }
 
-type ApiMemory = {
+export type ApiMemory = {
   id: string
+  memoryId?: string
+  clientId?: string
   personId: string
+  personName?: string
+  relationship?: string
   title: string
-  description: string
-  emotion: string
-  timestamp: string
+  description?: string
+  emotion?: string
+  videoUrl?: string
+  duration?: number
+  type?: string
+  status?: string
+  timestamp?: string
+  createdAt?: string
 }
 
-type ApiContext = {
-  person: ApiPerson
-  memories: string[]
-  lastConversation: string
-  emotionStatus: string
+export function resolveMediaUrl(url?: string): string {
+  if (!url) return ""
+  if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:")) {
+    return url
+  }
+  return `${API_BASE_URL}${url.startsWith("/") ? "" : "/"}${url}`
 }
 
 async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`)
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    cache: "no-store",
+  })
 
   if (!response.ok) {
     throw new Error(`API request failed: ${response.status}`)
@@ -45,28 +65,43 @@ export async function getRecognizedPerson(personId?: string): Promise<Person> {
     throw new Error("No person id available")
   }
 
-  // Fetch both the context and the full memory list in parallel
-  const [context, memories] = await Promise.all([
-    fetchJson<ApiContext>(`/api/context/${resolvedPersonId}`),
-    fetchJson<ApiMemory[]>(`/api/memory/${resolvedPersonId}`).catch((err) => {
-      console.warn("Failed to fetch memories from api/memory:", err)
-      return [] as ApiMemory[]
-    })
-  ])
+  // 1. Fetch real Person record from Spring Boot
+  const apiPerson = await fetchJson<ApiPerson>(`/api/persons/${resolvedPersonId}`)
 
-  const person = mapContextToPerson(context)
-
-  if (memories && memories.length > 0) {
-    // Sort memories by timestamp descending
-    const sortedMemories = [...memories].sort((a, b) => {
-      const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0
-      const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0
-      return timeB - timeA
-    })
-    person.memories = sortedMemories.map((mem, idx) => mapMemoryResponse(mem, idx))
+  // 2. Fetch real Memories from Spring Boot
+  let memories: ApiMemory[] = []
+  try {
+    memories = await fetchJson<ApiMemory[]>(`/api/memories/person/${resolvedPersonId}`)
+  } catch (err) {
+    try {
+      memories = await fetchJson<ApiMemory[]>(`/api/memory/${resolvedPersonId}`)
+    } catch {
+      memories = []
+    }
   }
 
-  return person
+  // 3. Construct real Person object — DO NOT INVENT FAKE MEMORIES
+  const mappedPerson: Person = {
+    id: apiPerson.id || apiPerson.personId || resolvedPersonId,
+    name: apiPerson.name,
+    relationship: apiPerson.relationship,
+    profileImage: resolveMediaUrl(apiPerson.photoUrl || apiPerson.profilePhotoUrl) || "/placeholder-user.jpg",
+    lastMet: apiPerson.lastSeen ? formatRealDate(apiPerson.lastSeen) : "First encounter",
+    lastLocation: "Living Room",
+    tags: apiPerson.timesSeen ? [`${apiPerson.timesSeen} encounters`] : [],
+    notes: apiPerson.notes,
+    memories: memories.map((m, idx) => mapMemoryResponse(m, idx))
+  }
+
+  return mappedPerson
+}
+
+export async function getPersonMemories(personId: string): Promise<ApiMemory[]> {
+  try {
+    return await fetchJson<ApiMemory[]>(`/api/memories/person/${personId}`)
+  } catch {
+    return []
+  }
 }
 
 async function getFirstPersonId(): Promise<string | undefined> {
@@ -74,97 +109,37 @@ async function getFirstPersonId(): Promise<string | undefined> {
   return people[0]?.id
 }
 
-function mapContextToPerson(context: ApiContext): Person {
-  return {
-    id: context.person.id,
-    name: context.person.name,
-    relationship: context.person.relationship,
-    profileImage: context.person.photoUrl || "/placeholder-user.jpg",
-    lastMet: context.lastConversation || "No recent conversation",
-    lastLocation: context.emotionStatus || "Unknown emotion",
-    tags: context.person.faceId ? [context.person.faceId] : [],
-    memories: context.memories.map((title, index) =>
-      mapMemoryTitle(context.person.id, title, index),
-    ),
+function formatRealDate(timestamp?: string): string {
+  if (!timestamp) return "Recorded interaction"
+  try {
+    const d = new Date(timestamp)
+    if (isNaN(d.getTime())) return timestamp
+    return d.toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    })
+  } catch {
+    return timestamp
   }
 }
 
-function mapMemoryTitle(
-  personId: string,
-  title: string,
-  index: number,
-): Memory {
-  return {
-    id: `${personId}-memory-${index}`,
-    personId,
-    title,
-    date: "Saved memory",
-    timestamp: index === 0 ? "Latest" : "Earlier",
-    location: "NeuroLens",
-    description: title,
-    image: "/placeholder.jpg",
-    emoji: "",
-    emotionalImportance: Math.max(1, 10 - index),
-    thumbnail: "/placeholder.jpg",
-  }
-}
-
-function mapMemoryResponse(
-  mem: ApiMemory,
-  index: number,
-): Memory {
-  let displayDate = "Saved memory"
-  let displayTime = "Earlier"
-  if (mem.timestamp) {
-    try {
-      const d = new Date(mem.timestamp)
-      const day = d.getDate()
-      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-      const month = months[d.getMonth()]
-      const year = d.getFullYear()
-      
-      let hours = d.getHours()
-      const minutes = d.getMinutes().toString().padStart(2, '0')
-      const ampm = hours >= 12 ? 'PM' : 'AM'
-      hours = hours % 12
-      hours = hours ? hours : 12
-      const timeStr = `${hours}:${minutes} ${ampm}`
-      
-      const now = new Date()
-      const dDate = new Date(d.getFullYear(), d.getMonth(), d.getDate())
-      const nowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      const diffDays = Math.round((nowDate.getTime() - dDate.getTime()) / (1000 * 60 * 60 * 24))
-
-      if (diffDays === 0) {
-        displayDate = `Today, ${timeStr}`
-        displayTime = "Today"
-      } else if (diffDays === 1) {
-        displayDate = `Yesterday, ${timeStr}`
-        displayTime = "Yesterday"
-      } else if (diffDays < 7) {
-        displayDate = `${diffDays} Days Ago, ${timeStr}`
-        displayTime = `${diffDays} days ago`
-      } else {
-        displayDate = `${day} ${month} ${year}, ${timeStr}`
-        displayTime = `${day} ${month}`
-      }
-    } catch (err) {
-      console.warn("Failed to parse memory timestamp:", err)
-    }
-  }
+function mapMemoryResponse(mem: ApiMemory, index: number): Memory {
+  const realDate = formatRealDate(mem.createdAt || mem.timestamp)
+  const videoSrc = resolveMediaUrl(mem.videoUrl)
 
   return {
-    id: mem.id || `${mem.personId}-memory-${index}`,
+    id: mem.id || mem.memoryId || `${mem.personId}-memory-${index}`,
     personId: mem.personId,
-    title: mem.title,
-    date: displayDate,
-    timestamp: displayTime,
+    title: mem.title || "Interaction Recording",
+    date: realDate,
+    timestamp: realDate,
     location: "Living Room",
-    description: mem.description || mem.title,
+    description: mem.description || mem.title || "Video interaction recorded by NeuroLens",
     image: "/placeholder.jpg",
-    emoji: "",
+    emoji: "🎥",
     emotionalImportance: Math.max(1, 10 - index),
-    thumbnail: index === 0 ? "/birthday-balloons.png" : index === 1 ? "/wedding-table.png" : "/placeholder.jpg",
+    video: videoSrc || undefined,
+    thumbnail: videoSrc || undefined,
   }
 }
 
@@ -203,6 +178,20 @@ export async function recognizeFace(embedding: number[]): Promise<RecognizeRespo
   }
 }
 
+export async function uploadRecordedMemory(formData: FormData): Promise<ApiMemory> {
+  const response = await fetch(`${API_BASE_URL}/api/memories/upload`, {
+    method: "POST",
+    body: formData,
+  })
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "")
+    throw new Error(`Upload failed (${response.status}): ${errText}`)
+  }
+
+  return response.json()
+}
+
 export async function registerPerson(data: {
   name: string
   relationship: string
@@ -217,7 +206,9 @@ export async function registerPerson(data: {
     },
     body: JSON.stringify({
       ...data,
-      photoUrl: data.faceSnapshots[0] || ""
+      photoUrl: data.faceSnapshots[0] || "",
+      profilePhotoUrl: data.faceSnapshots[0] || "",
+      trusted: true,
     }),
   })
 
@@ -226,12 +217,17 @@ export async function registerPerson(data: {
   }
 
   const apiPerson = await response.json()
-  return mapContextToPerson({
-    person: apiPerson,
+  return {
+    id: apiPerson.id,
+    name: apiPerson.name,
+    relationship: apiPerson.relationship,
+    profileImage: resolveMediaUrl(apiPerson.photoUrl || apiPerson.profilePhotoUrl) || "/placeholder-user.jpg",
+    lastMet: "Just registered",
+    lastLocation: "Living Room",
+    tags: [],
     memories: [],
-    lastConversation: "Just registered",
-    emotionStatus: "Happy"
-  })
+    notes: apiPerson.notes
+  }
 }
 
 export async function logSighting(data: {
@@ -260,7 +256,7 @@ export async function saveMemory(data: {
   description?: string
   emotion?: string
 }): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/api/memory`, {
+  const response = await fetch(`${API_BASE_URL}/api/memories`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -310,8 +306,6 @@ export async function parseIntroPhrase(text: string): Promise<{ name: string; re
 
     return await response.json()
   } catch (error) {
-    console.warn("Gemini API call failed, falling back to local Regex parser:", error)
-    
     const clean = text.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "").trim()
     let name = ""
     let relationship = ""
@@ -352,7 +346,6 @@ export async function parseMemoryPhrase(text: string): Promise<{ hasMemory: bool
 
     return await response.json()
   } catch (error) {
-    console.warn("Gemini API call for memory parsing failed:", error)
     return { hasMemory: false, title: "", emotion: "" }
   }
 }
@@ -374,6 +367,6 @@ export async function summarizeConversation(transcript: string): Promise<{ summa
     return await response.json()
   } catch (error) {
     console.error("Gemini API call for conversation summarization failed:", error)
-    throw error;
+    throw error
   }
 }
