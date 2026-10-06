@@ -46,6 +46,14 @@ export type EmotionLog = {
   timestamp?: string
 }
 
+export type Sighting = {
+  id: string
+  personId: string
+  sceneSnapshot?: string
+  timestamp?: string
+  location?: string
+}
+
 async function fetchJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     cache: "no-store",
@@ -134,6 +142,10 @@ export async function deleteMemory(id: string): Promise<any> {
 
 export async function getEmotionLogs(personId: string): Promise<EmotionLog[]> {
   return fetchJson<EmotionLog[]>(`/api/emotion-log/${personId}`)
+}
+
+export async function getSightings(personId: string): Promise<Sighting[]> {
+  return fetchJson<Sighting[]>(`/api/sightings/person/${personId}`)
 }
 
 export function resolveMediaUrl(url?: string): string {

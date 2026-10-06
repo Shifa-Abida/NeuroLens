@@ -1,27 +1,33 @@
 import { NextResponse } from 'next/server'
 
 export async function POST(request: Request) {
-  let transcript = ""
   try {
-    const body = await request.json()
-    transcript = body.transcript || ""
-    const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY
+    const body: unknown = await request.json()
+    const transcript = typeof body === "object" && body !== null && "transcript" in body
+      && typeof body.transcript === "string"
+      ? body.transcript.trim()
+      : ""
+    const apiKey = process.env.GEMINI_API_KEY
 
     if (!apiKey) {
-      console.warn("GEMINI_API_KEY environment variable is not configured.")
-      return NextResponse.json({ error: 'Missing API key' }, { status: 400 })
+      return NextResponse.json({ error: "GEMINI_API_KEY is not configured on the AR interface server." }, { status: 503 })
     }
 
-    if (!transcript || transcript.trim().length === 0) {
-      return NextResponse.json({ error: 'Transcript is empty' }, { status: 400 })
+    if (!transcript) {
+      return NextResponse.json({ error: "Transcript is empty." }, { status: 400 })
+    }
+    if (transcript.length > 10000) {
+      return NextResponse.json({ error: "Transcript is too long to summarize." }, { status: 413 })
     }
 
     const prompt = `You are a memory helper AI for a dementia patient's AR glasses system.
-Analyze the following conversation transcript between a caregiver/visitor and the patient. Summarize the entire interaction into a single, concise memory point written from the patient's perspective (maximum 8 words, e.g., "Visiting with Shifa today", "Shifa brought delicious apple pie", "Shifa talked about our beach trip", "Playing chess with Shifa").
+Analyze the following conversation transcript between the wearer and a recognized person. Summarize what they talked about into one concise, factual memory title (maximum 8 words). Do not invent details that are not in the transcript.
 Also, extract the dominant emotion/feeling of the conversation (e.g., "Happy", "Warm", "Nostalgic", "Peaceful", "Excited").
 
 Conversation Transcript:
-"${transcript}"
+<transcript>
+${transcript}
+</transcript>
 
 Respond ONLY with a valid, clean JSON object. Do not include markdown code block syntax (like \`\`\`json). Output exactly this JSON structure and nothing else:
 {
@@ -51,22 +57,29 @@ Respond ONLY with a valid, clean JSON object. Do not include markdown code block
     )
 
     if (!response.ok) {
-      throw new Error(`Gemini API returned status code ${response.status}`)
+      console.error("Gemini conversation summary request failed:", response.status)
+      return NextResponse.json({ error: "Gemini could not summarize this conversation." }, { status: 502 })
     }
 
     const data = await response.json()
-    let responseText = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}'
-    
-    // Clean up potential markdown formatting
-    responseText = responseText.replace(/```json/g, "").replace(/```/g, "").trim()
-    
-    const parsed = JSON.parse(responseText)
-    return NextResponse.json(parsed)
-  } catch (error: any) {
-    console.error('Error in summarize-conversation:', error)
-    const cleanText = (transcript || "").trim()
-    const summaryWords = cleanText.split(/\s+/).slice(0, 5).join(" ")
-    const summary = summaryWords ? `Spoke about: ${summaryWords}...` : "Visited with caregiver"
-    return NextResponse.json({ summary, emotion: "Warm" })
+    const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text
+      ?.replace(/```json/g, "").replace(/```/g, "").trim()
+    if (!responseText) {
+      return NextResponse.json({ error: "Gemini returned no conversation summary." }, { status: 502 })
+    }
+
+    const parsed: unknown = JSON.parse(responseText)
+    if (
+      typeof parsed !== "object" || parsed === null
+      || !("summary" in parsed) || typeof parsed.summary !== "string" || !parsed.summary.trim()
+      || !("emotion" in parsed) || typeof parsed.emotion !== "string" || !parsed.emotion.trim()
+    ) {
+      return NextResponse.json({ error: "Gemini returned an invalid conversation summary." }, { status: 502 })
+    }
+
+    return NextResponse.json({ summary: parsed.summary.trim(), emotion: parsed.emotion.trim() })
+  } catch (error) {
+    console.error("Error in summarize-conversation:", error)
+    return NextResponse.json({ error: "Could not summarize the conversation." }, { status: 500 })
   }
 }

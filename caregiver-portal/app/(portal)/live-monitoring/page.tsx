@@ -1,137 +1,91 @@
-import Image from "next/image"
-import {
-  ShieldCheck,
-  Clock,
-  MapPin,
-  Smile,
-  Radio,
-  Sparkles,
-  Cake,
-  Home,
-  Utensils,
-} from "lucide-react"
-import { PageHeader } from "@/components/page-header"
+"use client"
 
-const memoryTags = [
-  { label: "Birthday Party", icon: Cake },
-  { label: "Home Visit", icon: Home },
-  { label: "Family Dinner", icon: Utensils },
-]
+import { useEffect, useState } from "react"
+import { AlertCircle, Clock, Loader2, MapPin, User } from "lucide-react"
+import { PageHeader } from "@/components/page-header"
+import { getPeople, getSightings, type Person, type Sighting } from "@/lib/api"
 
 export default function LiveMonitoringPage() {
+  const [people, setPeople] = useState<Person[]>([])
+  const [latestSighting, setLatestSighting] = useState<Sighting | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+
+  useEffect(() => {
+    let active = true
+
+    const loadLatestSighting = async () => {
+      try {
+        const registeredPeople = await getPeople()
+        const sightings = (await Promise.all(
+          registeredPeople.map((person) => getSightings(person.id)),
+        )).flat().sort((left, right) =>
+          Date.parse(right.timestamp || "") - Date.parse(left.timestamp || ""),
+        )
+        if (!active) return
+        setPeople(registeredPeople)
+        setLatestSighting(sightings[0] || null)
+      } catch {
+        if (active) setLoadError(true)
+      } finally {
+        if (active) setIsLoading(false)
+      }
+    }
+
+    void loadLatestSighting()
+    return () => { active = false }
+  }, [])
+
+  const person = people.find((entry) => entry.id === latestSighting?.personId)
+
   return (
     <div>
       <PageHeader
         title="Live Monitoring"
-        subtitle="Real-time view of John's current interaction"
+        subtitle="Latest saved encounter for John Smith"
       />
 
       <div className="grid gap-5 lg:grid-cols-2">
-        {/* Current interaction */}
+        {/* Latest saved encounter */}
         <section className="rounded-3xl bg-card p-6 shadow-sm sm:p-8">
-          <div className="flex items-center gap-2">
-            <span className="size-2.5 animate-pulse rounded-full bg-destructive" />
-            <span className="text-sm font-semibold tracking-wide text-destructive">
-              LIVE
-            </span>
-          </div>
-
-          <h3 className="mt-5 text-xl font-semibold text-foreground">
-            Current Interaction
-          </h3>
-
-          <div className="mt-5 flex items-center gap-4">
-            <Image
-              src="/sarah-johnson.png"
-              alt="Sarah Johnson"
-              width={72}
-              height={72}
-              className="size-18 rounded-full object-cover"
-            />
-            <div>
-              <p className="text-xl font-bold text-foreground">Sarah Johnson</p>
-              <p className="text-muted-foreground">Daughter</p>
-              <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">
-                <ShieldCheck className="size-3.5" />
-                Recognized
-              </span>
+          <h3 className="text-xl font-semibold text-foreground">Latest Saved Encounter</h3>
+          {loadError ? (
+            <p role="alert" className="mt-5 flex items-center gap-2 text-sm text-destructive">
+              <AlertCircle className="size-4" /> Encounter data could not be loaded.
+            </p>
+          ) : isLoading ? (
+            <div className="mt-5 flex items-center gap-3 text-muted-foreground">
+              <Loader2 className="size-5 animate-spin" /> Loading encounter data…
             </div>
-          </div>
-
-          <div className="mt-7 grid gap-5 sm:grid-cols-2">
-            <Detail
-              icon={Clock}
-              label="Interaction Duration"
-              value="12 Minutes"
-            />
-            <Detail icon={MapPin} label="Location" value="Living Room" />
-            <Detail icon={Smile} label="Emotion" value="Happy" />
-            <Detail icon={Radio} label="Signal" value="Excellent" />
-          </div>
+          ) : latestSighting ? (
+            <div className="mt-6 space-y-5">
+              <Detail icon={User} label="Person" value={person?.name || "Unregistered person"} />
+              <Detail icon={MapPin} label="Location" value={latestSighting.location || "Not recorded"} />
+              <Detail icon={Clock} label="Time" value={formatDateTime(latestSighting.timestamp)} />
+            </div>
+          ) : (
+            <p className="mt-5 text-sm text-muted-foreground">No saved encounters are available.</p>
+          )}
         </section>
 
-        {/* AR view preview */}
+        {/* Streaming availability */}
         <section className="rounded-3xl bg-card p-6 shadow-sm sm:p-8">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                AR View Preview
-              </p>
-              <h3 className="mt-1 text-xl font-semibold text-foreground">
-                What John sees
-              </h3>
-            </div>
-            <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
-              Streaming
-            </span>
-          </div>
-
-          <div className="mt-5 rounded-3xl bg-slate-900 p-6 text-white">
-            <span className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-medium">
-              <span className="size-2 rounded-full bg-emerald-400" />
-              Recognized
-            </span>
-
-            <div className="mt-5 rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
-              <p className="text-2xl font-bold">Sarah Johnson</p>
-              <p className="text-slate-300">Daughter</p>
-
-              <p className="mt-4 font-medium">You met Sarah yesterday.</p>
-              <p className="text-slate-300">
-                Last conversation was about family dinner.
-              </p>
-
-              <p className="mt-5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                Memory Tags
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {memoryTags.map((tag) => {
-                  const Icon = tag.icon
-                  return (
-                    <span
-                      key={tag.label}
-                      className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-sm"
-                    >
-                      <Icon className="size-4" />
-                      {tag.label}
-                    </span>
-                  )
-                })}
-              </div>
-
-              <button
-                type="button"
-                className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-white px-4 py-3 font-semibold text-slate-900 transition-colors hover:bg-slate-100"
-              >
-                <Sparkles className="size-5" />
-                Recall Memory
-              </button>
-            </div>
-          </div>
+          <h3 className="text-xl font-semibold text-foreground">Live Camera Feed</h3>
+          <p className="mt-3 rounded-2xl bg-secondary/50 p-5 text-sm text-muted-foreground">
+            The backend does not provide a live camera stream. Saved encounter records are shown here when available.
+          </p>
         </section>
       </div>
     </div>
   )
+}
+
+function formatDateTime(value?: string) {
+  if (!value) return "Time not recorded"
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? "Time not recorded"
+    : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
 }
 
 function Detail({

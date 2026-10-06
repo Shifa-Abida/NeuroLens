@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { MemoryReplayEngine } from './MemoryReplayEngine'
-import { getRecognizedPerson, recognizeFace, registerPerson, uploadRecordedMemory, resolveMediaUrl } from '@/lib/api'
+import { getRecognizedPerson, recognizeFace, registerPerson, saveMemory, summarizeConversation, updatePersonProfile, uploadRecordedMemory, resolveMediaUrl } from '@/lib/api'
 import type { Person, Memory } from './types'
 import { Camera, UserPlus, Sparkles, AlertCircle, Scan, Volume2, Heart, MessageSquare, Calendar, Clock, Eye, Wifi, Battery, Shield, User, Video, CheckCircle2, Loader2, Play } from 'lucide-react'
 
@@ -21,6 +21,55 @@ type RecordingState =
   | "SAVED"
   | "COOLDOWN"
 
+type BrowserSpeechRecognitionResult = {
+  isFinal: boolean
+  0: { transcript: string }
+}
+
+type BrowserSpeechRecognitionEvent = {
+  resultIndex: number
+  results: ArrayLike<BrowserSpeechRecognitionResult>
+}
+
+type BrowserSpeechRecognition = {
+  continuous: boolean
+  interimResults: boolean
+  lang: string
+  onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null
+  onerror: ((event: { error: string }) => void) | null
+  onend: (() => void) | null
+  start: () => void
+  stop: () => void
+}
+
+type SpeechRecognitionWindow = Window & {
+  SpeechRecognition?: new () => BrowserSpeechRecognition
+  webkitSpeechRecognition?: new () => BrowserSpeechRecognition
+}
+
+type PendingConversation = {
+  personId: string
+  personName: string
+  transcript: string
+}
+
+function parseSpokenIntroduction(transcript: string) {
+  const introduction = transcript.match(/\b(?:I am|I'm)\s+(.+?)\s*[.!?]*$/i)
+  if (!introduction) return null
+
+  const phrase = introduction[1].trim().replace(/[.!?]+$/, "")
+  const relationshipMatch = phrase.match(/\b(?:and\s+)?(?:(?:I am|I'm)\s+)?your\s+(friend|daughter|son|sister|brother|mother|father|wife|husband|partner|caregiver|colleague|neighbor)\s*$/i)
+  if (!relationshipMatch) return null
+
+  const name = phrase.slice(0, relationshipMatch.index).trim().replace(/[,;.!?]+$/, "")
+  if (!/^[\p{L}][\p{L}'-]*(?:\s+[\p{L}][\p{L}'-]*){0,2}$/u.test(name)) return null
+
+  return {
+    name: name[0].toLocaleUpperCase() + name.slice(1),
+    relationship: relationshipMatch?.[1] || "Friend",
+  }
+}
+
 export function ARView() {
   const [isFaceApiLoaded, setIsFaceApiLoaded] = useState(false)
   const [systemStatus, setSystemStatus] = useState("Loading System...")
@@ -28,6 +77,9 @@ export function ARView() {
   const [isUnknown, setIsUnknown] = useState(false)
   const [confidence, setConfidence] = useState<number>(0)
   const [error, setError] = useState<string | null>(null)
+  const [captionEnabled, setCaptionEnabled] = useState(false)
+  const [captionText, setCaptionText] = useState("")
+  const [captionStatus, setCaptionStatus] = useState("")
 
   // Recording State Machine
   const [recordingState, setRecordingState] = useState<RecordingState>("IDLE")
@@ -38,6 +90,7 @@ export function ARView() {
   // Registration Mode States (for unknown faces detected in frame)
   const [regName, setRegName] = useState("")
   const [regRelationship, setRegRelationship] = useState("")
+  const [regNotes, setRegNotes] = useState("")
   const [capturedSnapshots, setCapturedSnapshots] = useState<string[]>([])
   const [capturedEmbeddings, setCapturedEmbeddings] = useState<number[][]>([])
   const [isRegistering, setIsRegistering] = useState(false)
@@ -50,6 +103,17 @@ export function ARView() {
   const recordedChunksRef = useRef<Blob[]>([])
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null)
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null)
+  const captionListeningRef = useRef(false)
+  const voiceEnrollmentInProgressRef = useRef(false)
+  const spokenIntroductionBufferRef = useRef({ transcript: "", updatedAt: 0 })
+  const saveSpokenIntroductionRef = useRef<(transcript: string) => Promise<void>>(async () => {})
+  const matchedPersonRef = useRef<Person | null>(null)
+  const pendingConversationRef = useRef<PendingConversation | null>(null)
+  const conversationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const activeRecordingPersonIdRef = useRef<string | null>(null)
+  const saveConversationSummaryRef = useRef<(conversation: PendingConversation) => Promise<void>>(async () => {})
+  const flushPendingConversationRef = useRef<(force?: boolean) => void>(() => {})
 
   // Lock refs to prevent race conditions and duplicate recordings
   const recordingStateRef = useRef<RecordingState>("IDLE")
@@ -57,12 +121,274 @@ export function ARView() {
   const recognitionInProgressRef = useRef<boolean>(false)
   const lastRecognizedRef = useRef<number>(0)
   const lastSeenTimeRef = useRef<number>(0)
+  const lastGreetedPersonIdRef = useRef<string | null>(null)
   const currentDescriptorRef = useRef<number[] | null>(null)
 
   // Update recording state sync ref
   const setControlledRecordingState = (state: RecordingState) => {
     recordingStateRef.current = state
     setRecordingState(state)
+  }
+
+  const saveConversationSummary = useCallback(async (conversation: PendingConversation) => {
+    setCaptionStatus(`Summarizing your conversation with ${conversation.personName}...`)
+    try {
+      const summary = await summarizeConversation(conversation.transcript)
+      await saveMemory({
+        personId: conversation.personId,
+        title: summary.summary,
+        emotion: summary.emotion,
+        type: "CONVERSATION",
+        duration: 0,
+      })
+      setCaptionStatus(`Memory saved: ${summary.summary}`)
+
+      if (matchedPersonRef.current?.id === conversation.personId) {
+        try {
+          const updatedPerson = await getRecognizedPerson(conversation.personId)
+          matchedPersonRef.current = updatedPerson
+          setMatchedPerson(updatedPerson)
+        } catch (refreshError) {
+          console.warn("Conversation memory was saved, but the person profile could not be refreshed:", refreshError)
+        }
+      }
+    } catch (saveError) {
+      console.error("Could not summarize and save conversation memory:", saveError)
+      const pending = pendingConversationRef.current
+      if (!pending) {
+        pendingConversationRef.current = conversation
+      } else if (
+        pending.personId === conversation.personId
+        && !pending.transcript.startsWith(conversation.transcript)
+      ) {
+        pending.transcript = `${conversation.transcript} ${pending.transcript}`.trim()
+      }
+      setCaptionStatus("Conversation summary could not be saved. Check the Gemini key and backend, then speak again to retry.")
+    }
+  }, [])
+
+  const flushPendingConversation = useCallback((force = false) => {
+    if (conversationTimerRef.current) {
+      clearTimeout(conversationTimerRef.current)
+      conversationTimerRef.current = null
+    }
+
+    const conversation = pendingConversationRef.current
+    if (!conversation) return
+    if (!force && activeRecordingPersonIdRef.current === conversation.personId) {
+      setCaptionStatus("Conversation captured. Saving its summary after the video recording.")
+      return
+    }
+
+    pendingConversationRef.current = null
+    void saveConversationSummaryRef.current(conversation)
+  }, [])
+
+  useEffect(() => {
+    saveConversationSummaryRef.current = saveConversationSummary
+  }, [saveConversationSummary])
+
+  useEffect(() => {
+    flushPendingConversationRef.current = flushPendingConversation
+  }, [flushPendingConversation])
+
+  useEffect(() => {
+    matchedPersonRef.current = matchedPerson
+  }, [matchedPerson])
+
+  const saveSpokenIntroduction = useCallback(async (transcript: string) => {
+    const introduction = parseSpokenIntroduction(transcript)
+    if (!introduction || voiceEnrollmentInProgressRef.current) return
+
+    if (matchedPerson) {
+      if (matchedPerson.name.trim().toLocaleLowerCase() !== introduction.name.toLocaleLowerCase()) {
+        setCaptionStatus(`${matchedPerson.name} is already identified. This introduction was not saved.`)
+        return
+      }
+
+      voiceEnrollmentInProgressRef.current = true
+      setCaptionStatus(`Saving details for ${matchedPerson.name}...`)
+      try {
+        const updatedPerson = await updatePersonProfile({
+          personId: matchedPerson.id,
+          name: matchedPerson.name,
+          relationship: introduction.relationship,
+          notes: transcript.trim(),
+        })
+        setMatchedPerson((currentPerson) => currentPerson
+          ? { ...currentPerson, relationship: updatedPerson.relationship, notes: updatedPerson.notes }
+          : currentPerson)
+        matchedPersonRef.current = {
+          ...matchedPerson,
+          relationship: updatedPerson.relationship,
+          notes: updatedPerson.notes,
+        }
+        setCaptionStatus(`${matchedPerson.name} saved as your ${introduction.relationship}.`)
+      } catch (saveError) {
+        console.error("Could not update spoken introduction", saveError)
+        setCaptionStatus("Profile could not be updated. Check the server connection.")
+      } finally {
+        voiceEnrollmentInProgressRef.current = false
+      }
+      return
+    }
+
+    if (!isUnknown) return
+
+    const video = cameraVideoRef.current
+    const descriptor = currentDescriptorRef.current
+    if (!video || !descriptor || Date.now() - lastSeenTimeRef.current > 3000) {
+      setCaptionStatus("Keep an unregistered face in view while speaking.")
+      return
+    }
+
+    const snapshotCanvas = document.createElement("canvas")
+    snapshotCanvas.width = 160
+    snapshotCanvas.height = 160
+    const snapshotContext = snapshotCanvas.getContext("2d")
+    if (!snapshotContext) return
+
+    snapshotContext.translate(snapshotCanvas.width, 0)
+    snapshotContext.scale(-1, 1)
+    snapshotContext.drawImage(video, 0, 0, snapshotCanvas.width, snapshotCanvas.height)
+
+    voiceEnrollmentInProgressRef.current = true
+    setCaptionStatus(`Saving ${introduction.name}...`)
+
+    try {
+      const newPerson = await registerPerson({
+        name: introduction.name,
+        relationship: introduction.relationship,
+        faceEmbeddings: [descriptor],
+        faceSnapshots: [snapshotCanvas.toDataURL("image/jpeg")],
+        notes: transcript.trim(),
+      })
+
+      setMatchedPerson(newPerson)
+      matchedPersonRef.current = newPerson
+      setIsUnknown(false)
+      setConfidence(98.5)
+      lastGreetedPersonIdRef.current = newPerson.id
+      setCaptionStatus(`${newPerson.name} saved as your ${newPerson.relationship}.`)
+    } catch (saveError) {
+      console.error("Could not save spoken introduction", saveError)
+      setCaptionStatus("Profile could not be saved. Check the server connection.")
+    } finally {
+      voiceEnrollmentInProgressRef.current = false
+    }
+  }, [isUnknown, matchedPerson])
+
+  useEffect(() => {
+    saveSpokenIntroductionRef.current = saveSpokenIntroduction
+  }, [saveSpokenIntroduction])
+
+  useEffect(() => {
+    const speechWindow = window as SpeechRecognitionWindow
+    const Recognition = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition
+    if (!Recognition) {
+      setCaptionStatus("Live captions are not supported by this browser.")
+      return
+    }
+
+    const recognition = new Recognition()
+    recognition.continuous = true
+    recognition.interimResults = true
+    recognition.lang = navigator.language || "en-US"
+    recognition.onresult = (event) => {
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index]
+        const transcript = result[0]?.transcript.trim()
+        if (!transcript) continue
+        setCaptionText(transcript)
+        if (result.isFinal) {
+          const recognizedPerson = matchedPersonRef.current
+          if (recognizedPerson) {
+            const previousConversation = pendingConversationRef.current
+            if (previousConversation && previousConversation.personId !== recognizedPerson.id) {
+              flushPendingConversationRef.current(true)
+            }
+
+            const pending = pendingConversationRef.current
+            pendingConversationRef.current = pending?.personId === recognizedPerson.id
+              ? { ...pending, transcript: `${pending.transcript} ${transcript}`.trim() }
+              : {
+                  personId: recognizedPerson.id,
+                  personName: recognizedPerson.name,
+                  transcript,
+                }
+
+            if (conversationTimerRef.current) clearTimeout(conversationTimerRef.current)
+            conversationTimerRef.current = setTimeout(() => {
+              flushPendingConversationRef.current()
+            }, 5000)
+          }
+
+          const previous = spokenIntroductionBufferRef.current
+          const prefix = Date.now() - previous.updatedAt < 8000 ? previous.transcript : ""
+          const combinedTranscript = [prefix, transcript].filter(Boolean).join(" ")
+          spokenIntroductionBufferRef.current = { transcript: combinedTranscript, updatedAt: Date.now() }
+
+          if (parseSpokenIntroduction(combinedTranscript)) {
+            spokenIntroductionBufferRef.current = { transcript: "", updatedAt: 0 }
+            void saveSpokenIntroductionRef.current(combinedTranscript)
+          }
+        }
+      }
+    }
+    recognition.onerror = (event) => {
+      if (event.error === "not-allowed") {
+        captionListeningRef.current = false
+        setCaptionEnabled(false)
+        setCaptionStatus("Microphone permission is needed for captions.")
+      } else if (event.error !== "no-speech") {
+        setCaptionStatus("Voice captions stopped unexpectedly.")
+      }
+    }
+    recognition.onend = () => {
+      if (!captionListeningRef.current) return
+      window.setTimeout(() => {
+        if (captionListeningRef.current) {
+          try {
+            recognition.start()
+          } catch {
+            setCaptionStatus("Listening for captions...")
+          }
+        }
+      }, 250)
+    }
+    speechRecognitionRef.current = recognition
+
+    return () => {
+      captionListeningRef.current = false
+      recognition.stop()
+      speechRecognitionRef.current = null
+      flushPendingConversationRef.current()
+    }
+  }, [])
+
+  const toggleCaptions = () => {
+    const recognition = speechRecognitionRef.current
+    if (!recognition) return
+
+    if (captionListeningRef.current) {
+      captionListeningRef.current = false
+      setCaptionEnabled(false)
+      setCaptionStatus("Captions paused.")
+      recognition.stop()
+      flushPendingConversationRef.current()
+      return
+    }
+
+    captionListeningRef.current = true
+    setCaptionEnabled(true)
+    setCaptionStatus("Listening for captions...")
+    try {
+      recognition.start()
+    } catch {
+      captionListeningRef.current = false
+      setCaptionEnabled(false)
+      setCaptionStatus("Could not start voice captions.")
+    }
   }
 
   // Dynamic clock for Top Bar
@@ -213,9 +539,23 @@ export function ARView() {
 
         if (audioTracks.length > 0) {
           console.log("[NEUROLENS] AUDIO TRACK READY", audioTracks[0].label)
+          const recognition = speechRecognitionRef.current
+          if (recognition && !captionListeningRef.current) {
+            captionListeningRef.current = true
+            setCaptionEnabled(true)
+            setCaptionStatus("Captions listening automatically...")
+            try {
+              recognition.start()
+            } catch {
+              captionListeningRef.current = false
+              setCaptionEnabled(false)
+              setCaptionStatus("Automatic captions could not start. Press Captions to retry.")
+            }
+          }
         } else {
           console.error("[NEUROLENS] ERROR: NO AUDIO TRACK DETECTED")
           setError("No audio track available from microphone.")
+          setCaptionStatus("Microphone access is required for captions.")
         }
 
         if (cameraVideoRef.current) {
@@ -225,6 +565,7 @@ export function ARView() {
       .catch((err) => {
         console.error("[NEUROLENS] CAMERA / MICROPHONE ACCESS FAILED", err)
         setError("Camera and microphone access required for NeuroLens vision & interaction recording.")
+        setCaptionStatus("Allow camera and microphone access to start captions automatically.")
       })
 
     return () => {
@@ -388,6 +729,8 @@ export function ARView() {
           console.error("RECORDING FAILED: EMPTY VIDEO BLOB")
           setRecordingError("RECORDING FAILED: EMPTY VIDEO BLOB")
           setControlledRecordingState("IDLE")
+          activeRecordingPersonIdRef.current = null
+          flushPendingConversationRef.current(true)
           return
         }
 
@@ -440,10 +783,14 @@ export function ARView() {
           console.error("[NEUROLENS] Memory upload failed:", uploadErr)
           setRecordingError("Memory upload to backend failed.")
           setControlledRecordingState("IDLE")
+        } finally {
+          activeRecordingPersonIdRef.current = null
+          flushPendingConversationRef.current(true)
         }
       }
 
       // 7. Start recording
+      activeRecordingPersonIdRef.current = person.id
       setControlledRecordingState("RECORDING")
       recorder.start(1000) // collect slice every 1000ms
       console.log(
@@ -475,6 +822,8 @@ export function ARView() {
       console.error("[NEUROLENS] Failed to start MediaRecorder:", err)
       setRecordingError("Failed to start MediaRecorder.")
       setControlledRecordingState("IDLE")
+      activeRecordingPersonIdRef.current = null
+      flushPendingConversationRef.current(true)
     }
   }, [])
 
@@ -522,7 +871,9 @@ export function ARView() {
         if (resizedDetections.length === 0) {
           // Clear active face target if not seen for 4 seconds
           if (Date.now() - lastSeenTimeRef.current > 4000) {
+            lastGreetedPersonIdRef.current = null
             if (recordingStateRef.current === "IDLE") {
+              matchedPersonRef.current = null
               setMatchedPerson(null)
               setIsUnknown(false)
             }
@@ -569,9 +920,22 @@ export function ARView() {
             recognizeFace(descriptor)
               .then((res) => {
                 if (res.matched && res.person) {
+                  matchedPersonRef.current = res.person
                   setMatchedPerson(res.person)
                   setIsUnknown(false)
                   setConfidence(res.confidence)
+
+                  if (lastGreetedPersonIdRef.current !== res.person.id) {
+                    lastGreetedPersonIdRef.current = res.person.id
+                    if ("speechSynthesis" in window) {
+                      const relationship = res.person.relationship.trim()
+                      const greeting = relationship
+                        ? `Identified: ${res.person.name}, your ${relationship}.`
+                        : `Identified: ${res.person.name}.`
+                      window.speechSynthesis.cancel()
+                      window.speechSynthesis.speak(new SpeechSynthesisUtterance(greeting))
+                    }
+                  }
 
                   console.log("[NEUROLENS] PERSON RECOGNIZED:", res.person.name)
                   const memCount = res.person.memories ? res.person.memories.length : 0
@@ -589,7 +953,8 @@ export function ARView() {
                     }
                   }
                 } else {
-                  if (recordingStateRef.current === "IDLE") {
+                  if (recordingStateRef.current === "IDLE" || recordingStateRef.current === "PERSON_DETECTED") {
+                    matchedPersonRef.current = null
                     setMatchedPerson(null)
                     setIsUnknown(true)
                     setConfidence(res.confidence || 10.0)
@@ -661,15 +1026,18 @@ export function ARView() {
         relationship: regRelationship,
         faceEmbeddings: capturedEmbeddings,
         faceSnapshots: capturedSnapshots,
+        notes: regNotes.trim(),
       })
 
       setRegStatus("Successfully enrolled!")
       setRegName("")
       setRegRelationship("")
+      setRegNotes("")
       setCapturedSnapshots([])
       setCapturedEmbeddings([])
 
       setMatchedPerson(newPerson)
+      matchedPersonRef.current = newPerson
       setIsUnknown(false)
       setConfidence(98.5)
 
@@ -882,7 +1250,7 @@ export function ARView() {
                       {recordingState === "RECORDING"
                         ? `Recording (${recordingCountdown}s)`
                         : recordingState === "SAVED"
-                        ? "Saved to MongoDB"
+                        ? "Saved to memory library"
                         : recordingState === "UPLOADING"
                         ? "Uploading Blob"
                         : "Ready"}
@@ -911,6 +1279,21 @@ export function ARView() {
                 ref={canvasRef}
                 className="absolute inset-0 pointer-events-none z-10 animate-fade-in"
               />
+
+              <div
+                aria-live="polite"
+                className="absolute bottom-24 left-1/2 z-30 w-[90%] max-w-xl -translate-x-1/2 rounded-xl border border-white/20 bg-slate-950/95 px-4 py-3 text-center shadow-xl backdrop-blur-md"
+              >
+                <p className="mb-1 text-[9px] font-bold uppercase text-emerald-300">
+                  {captionEnabled ? "Live captions" : "Captions"}
+                </p>
+                <p className="break-words text-sm font-semibold text-white">
+                  {captionText || captionStatus || "Turn on Captions to see speech here."}
+                </p>
+                {captionText && captionStatus && (
+                  <p className="mt-1 text-[11px] text-emerald-300">{captionStatus}</p>
+                )}
+              </div>
 
               {/* AR RECORDING HUD BANNER */}
               {recordingState === "RECORDING" && (
@@ -973,6 +1356,18 @@ export function ARView() {
                   <span className="size-2 rounded-full bg-emerald-400 animate-pulse" />
                   <span>Mic Connected</span>
                 </div>
+                <button
+                  type="button"
+                  onClick={toggleCaptions}
+                  aria-pressed={captionEnabled}
+                  title={captionEnabled ? "Pause voice captions" : "Start voice captions"}
+                  className={`flex items-center gap-2 border-l border-white/10 pl-6 text-xs font-bold transition ${
+                    captionEnabled ? "text-emerald-300" : "text-slate-300 hover:text-white"
+                  }`}
+                >
+                  <Volume2 className="size-4" />
+                  <span>{captionEnabled ? "Captions On" : "Captions"}</span>
+                </button>
               </div>
             </div>
 
@@ -1034,6 +1429,16 @@ export function ARView() {
                           onChange={(e) => setRegRelationship(e.target.value)}
                           placeholder="e.g. Friend"
                           className="w-full bg-slate-950/60 border border-white/10 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-blue-500 text-white"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Details to remember</label>
+                        <textarea
+                          value={regNotes}
+                          onChange={(e) => setRegNotes(e.target.value)}
+                          placeholder="A few helpful details about this person"
+                          rows={3}
+                          className="w-full resize-y bg-slate-950/60 border border-white/10 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-blue-500 text-white"
                         />
                       </div>
 

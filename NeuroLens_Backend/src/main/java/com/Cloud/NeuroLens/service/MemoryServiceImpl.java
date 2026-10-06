@@ -79,7 +79,7 @@ public class MemoryServiceImpl implements MemoryService {
         // 1. Physically persist the actual video file in configured media storage
         String videoUrl = mediaStorageService.storeVideo(video);
 
-        // 2. Create and persist MongoDB memory record
+        // 2. Create and persist PostgreSQL memory record
         LocalDateTime now = LocalDateTime.now();
         String pName = personName != null && !personName.isBlank() ? personName : person.getName();
         String rel = relationship != null && !relationship.isBlank() ? relationship : person.getRelationship();
@@ -158,7 +158,7 @@ public class MemoryServiceImpl implements MemoryService {
             mediaStorageService.deleteMedia(memory.getVideoUrl());
         }
 
-        // Delete memory record from MongoDB
+        // Delete memory record from PostgreSQL
         memoryRepository.delete(memory);
 
         // Remove memory reference from Person if present

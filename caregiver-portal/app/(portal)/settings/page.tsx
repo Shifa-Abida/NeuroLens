@@ -1,50 +1,21 @@
-import Image from "next/image"
-import {
-  Camera,
-  ChevronRight,
-  ImageIcon,
-  Mail,
-  Mic,
-  Phone,
-  UserCog,
-  Video,
-} from "lucide-react"
-import { PageHeader } from "@/components/page-header"
+"use client"
 
-const managementLinks = [
-  {
-    title: "Edit Patient Information",
-    subtitle: "John Smith, 72 years",
-    icon: null,
-  },
-  {
-    title: "Manage Family Members",
-    subtitle: "4 people linked",
-    icon: null,
-  },
-  {
-    title: "Upload Photos",
-    subtitle: "Add memories",
-    icon: ImageIcon,
-  },
-  {
-    title: "Upload Videos",
-    subtitle: "Share moments",
-    icon: Video,
-  },
-  {
-    title: "Upload Audio Memories",
-    subtitle: "Voice notes & songs",
-    icon: Mic,
-  },
-  {
-    title: "Emergency Contacts",
-    subtitle: "2 contacts on file",
-    icon: null,
-  },
-]
+import { useEffect, useState } from "react"
+import { AlertCircle, Loader2, Users } from "lucide-react"
+import Link from "next/link"
+import { PageHeader } from "@/components/page-header"
+import { getPeople } from "@/lib/api"
 
 export default function SettingsPage() {
+  const [peopleCount, setPeopleCount] = useState<number | null>(null)
+  const [loadError, setLoadError] = useState(false)
+
+  useEffect(() => {
+    getPeople()
+      .then((people) => setPeopleCount(people.length))
+      .catch(() => setLoadError(true))
+  }, [])
+
   return (
     <div>
       <PageHeader
@@ -54,83 +25,25 @@ export default function SettingsPage() {
 
       <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border/60 sm:p-8">
         <h2 className="text-xl font-bold text-foreground">Caregiver Profile</h2>
-
-        <div className="mt-6 flex items-center gap-5">
-          <div className="relative">
-            <Image
-              src="/linda-smith.png"
-              alt="Linda Smith"
-              width={88}
-              height={88}
-              className="h-22 w-22 rounded-2xl object-cover"
-            />
-            <span className="absolute -bottom-2 -right-2 flex h-9 w-9 items-center justify-center rounded-full bg-primary text-primary-foreground ring-4 ring-card">
-              <Camera className="h-4 w-4" />
-            </span>
-          </div>
-          <div>
-            <p className="text-2xl font-bold text-foreground">Linda Smith</p>
-            <p className="text-muted-foreground">Primary caregiver</p>
-          </div>
-        </div>
-
-        <div className="mt-8 grid gap-6 sm:grid-cols-3">
-          <div>
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <UserCog className="h-4 w-4" /> Name
-            </p>
-            <p className="mt-1 font-semibold text-foreground">Linda Smith</p>
-          </div>
-          <div>
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Mail className="h-4 w-4" /> Email
-            </p>
-            <p className="mt-1 font-semibold text-foreground">
-              linda.smith@neurolens.care
-            </p>
-          </div>
-          <div>
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Phone className="h-4 w-4" /> Phone
-            </p>
-            <p className="mt-1 font-semibold text-foreground">
-              +1 (415) 555-0142
-            </p>
-          </div>
-        </div>
+        <p className="mt-4 text-sm text-muted-foreground">
+          Caregiver profile details are not configured in the backend.
+        </p>
       </div>
 
       <div className="mt-6 rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border/60 sm:p-8">
         <h2 className="text-xl font-bold text-foreground">Patient Management</h2>
-
-        <div className="mt-6 grid gap-4 lg:grid-cols-2">
-          {managementLinks.map((link) => {
-            const Icon = link.icon
-            return (
-              <button
-                key={link.title}
-                type="button"
-                className="flex items-center justify-between gap-4 rounded-2xl bg-secondary/40 p-5 text-left ring-1 ring-border/50 transition-shadow hover:shadow-md"
-              >
-                <span className="flex items-center gap-4">
-                  {Icon && (
-                    <span className="flex h-11 w-11 items-center justify-center rounded-full bg-sky-100 text-sky-600">
-                      <Icon className="h-5 w-5" />
-                    </span>
-                  )}
-                  <span>
-                    <span className="block font-bold text-foreground">
-                      {link.title}
-                    </span>
-                    <span className="block text-sm text-muted-foreground">
-                      {link.subtitle}
-                    </span>
-                  </span>
-                </span>
-                <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground" />
-              </button>
-            )
-          })}
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-secondary/40 p-5 ring-1 ring-border/50">
+          <div>
+            <p className="text-lg font-bold text-foreground">John Smith</p>
+            <p className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+              <Users className="size-4" />
+              {loadError ? "Registered people unavailable" : peopleCount === null ? <Loader2 className="size-4 animate-spin" /> : `${peopleCount} registered people`}
+              {loadError && <AlertCircle className="size-4 text-destructive" />}
+            </p>
+          </div>
+          <Link href="/people-database" className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">
+            Manage people
+          </Link>
         </div>
       </div>
     </div>

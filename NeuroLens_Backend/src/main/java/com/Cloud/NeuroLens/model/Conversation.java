@@ -1,9 +1,12 @@
 package com.Cloud.NeuroLens.model;
 
 import lombok.*;
-import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.index.Indexed;
-import org.springframework.data.mongodb.core.mapping.Document;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
 
 import java.time.LocalDateTime;
 
@@ -12,19 +15,21 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-@Document(collection = "conversations")
+@Entity
+@Table(name = "conversations")
 public class Conversation {
 
     @Id
+    @GeneratedValue(strategy = GenerationType.UUID)
     private String id;
 
-    @Indexed
     private String personId;
 
+    @Column(columnDefinition = "text")
     private String transcript;   // raw conversation text
 
+    @Column(columnDefinition = "text")
     private String summary;      // AI-generated later
 
-    @Indexed
     private LocalDateTime timestamp;
 }

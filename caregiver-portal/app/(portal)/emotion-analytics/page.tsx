@@ -8,108 +8,93 @@ import {
   ResponsiveContainer,
   XAxis,
 } from "recharts"
+import { Loader2 } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
-import { getEmotionLogs, getPeople } from "@/lib/api"
-
-const fallbackEmotions = [
-  {
-    label: "Happy",
-    emoji: "😊",
-    value: 58,
-    badgeClass: "bg-emerald-100 text-emerald-700",
-    barClass: "bg-emerald-500",
-  },
-  {
-    label: "Neutral",
-    emoji: "😐",
-    value: 24,
-    badgeClass: "bg-sky-100 text-sky-700",
-    barClass: "bg-sky-500",
-  },
-  {
-    label: "Confused",
-    emoji: "😖",
-    value: 12,
-    badgeClass: "bg-amber-100 text-amber-700",
-    barClass: "bg-amber-500",
-  },
-  {
-    label: "Sad",
-    emoji: "😢",
-    value: 6,
-    badgeClass: "bg-red-100 text-red-700",
-    barClass: "bg-red-500",
-  },
-]
-
-const fallbackDailyData = [
-  { x: "1", v: 62 },
-  { x: "2", v: 66 },
-  { x: "3", v: 70 },
-  { x: "4", v: 58 },
-  { x: "5", v: 60 },
-  { x: "6", v: 74 },
-  { x: "7", v: 68 },
-  { x: "8", v: 78 },
-  { x: "9", v: 72 },
-  { x: "10", v: 66 },
-  { x: "11", v: 76 },
-  { x: "12", v: 84 },
-]
+import { getEmotionLogs, getPeople, type EmotionLog } from "@/lib/api"
 
 const ranges = ["Daily", "Weekly", "Monthly"] as const
+const emotionStyles: Record<string, { emoji: string; badgeClass: string; barClass: string }> = {
+  Happy: { emoji: "😊", badgeClass: "bg-emerald-100 text-emerald-700", barClass: "bg-emerald-500" },
+  Neutral: { emoji: "😐", badgeClass: "bg-sky-100 text-sky-700", barClass: "bg-sky-500" },
+  Confused: { emoji: "😖", badgeClass: "bg-amber-100 text-amber-700", barClass: "bg-amber-500" },
+  Sad: { emoji: "😢", badgeClass: "bg-red-100 text-red-700", barClass: "bg-red-500" },
+}
 
 export default function EmotionAnalyticsPage() {
   const [range, setRange] = useState<(typeof ranges)[number]>("Daily")
-  const [emotions, setEmotions] = useState(fallbackEmotions)
-  const [dailyData, setDailyData] = useState(fallbackDailyData)
+  const [logs, setLogs] = useState<EmotionLog[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
 
   useEffect(() => {
-    getPeople()
-      .then(async (people) => {
-        const firstPerson = people[0]
+    let active = true
 
-        if (!firstPerson) {
-          return
-        }
+    const loadEmotionLogs = async () => {
+      try {
+        const people = await getPeople()
+        const results = await Promise.all(people.map((person) => getEmotionLogs(person.id)))
+        if (active) setLogs(results.flat())
+      } catch {
+        if (active) setLoadError(true)
+      } finally {
+        if (active) setIsLoading(false)
+      }
+    }
 
-        const logs = await getEmotionLogs(firstPerson.id)
-
-        if (logs.length === 0) {
-          return
-        }
-
-        const counts = logs.reduce<Record<string, number>>((acc, log) => {
-          const key = log.emotion || "Neutral"
-          acc[key] = (acc[key] || 0) + 1
-          return acc
-        }, {})
-        const total = logs.length
-
-        setEmotions(
-          fallbackEmotions.map((emotion) => ({
-            ...emotion,
-            value: Math.round(((counts[emotion.label] || 0) / total) * 100),
-          })),
-        )
-
-        setDailyData(
-          logs.slice(0, 12).reverse().map((log, index) => ({
-            x: String(index + 1),
-            v: Math.round((log.confidence || 0) * 100),
-          })),
-        )
-      })
-      .catch(() => undefined)
+    void loadEmotionLogs()
+    return () => { active = false }
   }, [])
+
+  const rangeStart = new Date()
+  rangeStart.setHours(0, 0, 0, 0)
+  if (range === "Weekly") rangeStart.setDate(rangeStart.getDate() - 6)
+  if (range === "Monthly") rangeStart.setDate(rangeStart.getDate() - 29)
+
+  const filteredLogs = logs.filter((log) => {
+    if (!log.timestamp) return false
+    const timestamp = new Date(log.timestamp)
+    return !Number.isNaN(timestamp.getTime()) && timestamp >= rangeStart
+  })
+  const emotionCounts = filteredLogs.reduce<Record<string, number>>((counts, log) => {
+    const emotion = log.emotion || "Unspecified"
+    counts[emotion] = (counts[emotion] || 0) + 1
+    return counts
+  }, {})
+  const emotions = Object.entries(emotionCounts).map(([label, count]) => ({
+    label,
+    value: Math.round((count / filteredLogs.length) * 100),
+    ...emotionStyles[label] || { emoji: "•", badgeClass: "bg-muted text-muted-foreground", barClass: "bg-muted-foreground" },
+  }))
+  const dailyData = filteredLogs
+    .filter((log) => log.timestamp)
+    .sort((left, right) => Date.parse(left.timestamp || "") - Date.parse(right.timestamp || ""))
+    .map((log, index) => ({
+      x: new Date(log.timestamp!).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) || String(index + 1),
+      v: Math.round((log.confidence || 0) * 100),
+    }))
 
   return (
     <div>
       <PageHeader
         title="Emotion Analytics"
-        subtitle="Understand John's mood across the day, week and month"
+        subtitle="Recorded emotion logs for John Smith"
       />
 
+      {isLoading ? (
+        <div className="flex items-center justify-center gap-3 rounded-3xl bg-card p-12 text-sm text-muted-foreground shadow-sm ring-1 ring-border/60">
+          <Loader2 className="size-5 animate-spin" /> Loading emotion records…
+        </div>
+      ) : loadError ? (
+        <div role="alert" className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5 text-sm text-amber-800">
+          Emotion records could not be loaded from the backend.
+        </div>
+      ) : logs.length === 0 ? (
+        <div className="rounded-3xl bg-card p-12 text-center shadow-sm ring-1 ring-border/60">
+          <h2 className="text-lg font-semibold text-foreground">No emotion records available</h2>
+          <p className="mt-2 text-sm text-muted-foreground">Analytics will appear when emotion logs are saved.</p>
+        </div>
+      ) : (
+      <>
       <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
         {emotions.map((e) => (
           <div
@@ -165,7 +150,11 @@ export default function EmotionAnalyticsPage() {
           </div>
         </div>
 
-        <div className="mt-8 h-80 w-full">
+        {filteredLogs.length === 0 ? (
+          <p className="mt-8 rounded-2xl bg-secondary/40 p-8 text-center text-sm text-muted-foreground">
+            No emotion records for this date range.
+          </p>
+        ) : <div className="mt-8 h-80 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart
               data={dailyData}
@@ -212,8 +201,10 @@ export default function EmotionAnalyticsPage() {
               />
             </AreaChart>
           </ResponsiveContainer>
-        </div>
+        </div>}
       </div>
+      </>
+      )}
     </div>
   )
 }

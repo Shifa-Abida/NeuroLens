@@ -38,6 +38,11 @@ export type ApiMemory = {
   createdAt?: string
 }
 
+export type ConversationSummary = {
+  summary: string
+  emotion: string
+}
+
 export function resolveMediaUrl(url?: string): string {
   if (!url) return ""
   if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:")) {
@@ -230,6 +235,29 @@ export async function registerPerson(data: {
   }
 }
 
+export async function updatePersonProfile(data: {
+  personId: string
+  name: string
+  relationship: string
+  notes: string
+}): Promise<ApiPerson> {
+  const response = await fetch(`${API_BASE_URL}/api/persons/${data.personId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: data.name,
+      relationship: data.relationship,
+      notes: data.notes,
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Profile update failed: ${response.status}`)
+  }
+
+  return response.json() as Promise<ApiPerson>
+}
+
 export async function logSighting(data: {
   personId: string
   sceneSnapshot: string
@@ -255,7 +283,9 @@ export async function saveMemory(data: {
   title: string
   description?: string
   emotion?: string
-}): Promise<any> {
+  type?: string
+  duration?: number
+}): Promise<ApiMemory> {
   const response = await fetch(`${API_BASE_URL}/api/memories`, {
     method: "POST",
     headers: {
@@ -268,7 +298,27 @@ export async function saveMemory(data: {
     throw new Error(`Saving memory failed: ${response.status}`)
   }
 
-  return response.json()
+  return response.json() as Promise<ApiMemory>
+}
+
+export async function summarizeConversation(transcript: string): Promise<ConversationSummary> {
+  const response = await fetch("/api/summarize-conversation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ transcript }),
+  })
+
+  const result = await response.json() as ConversationSummary | { error?: string }
+  if (!response.ok) {
+    throw new Error("error" in result && result.error
+      ? result.error
+      : `Conversation summarization failed: ${response.status}`)
+  }
+  if (!("summary" in result) || !result.summary.trim() || !result.emotion.trim()) {
+    throw new Error("Gemini returned an incomplete conversation summary.")
+  }
+
+  return result
 }
 
 export async function saveConversation(data: {
@@ -347,26 +397,5 @@ export async function parseMemoryPhrase(text: string): Promise<{ hasMemory: bool
     return await response.json()
   } catch (error) {
     return { hasMemory: false, title: "", emotion: "" }
-  }
-}
-
-export async function summarizeConversation(transcript: string): Promise<{ summary: string; emotion: string }> {
-  try {
-    const response = await fetch('/api/summarize-conversation', {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ transcript }),
-    })
-
-    if (!response.ok) {
-      throw new Error(`Summarize API failed with status ${response.status}`)
-    }
-
-    return await response.json()
-  } catch (error) {
-    console.error("Gemini API call for conversation summarization failed:", error)
-    throw error
   }
 }

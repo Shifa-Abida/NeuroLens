@@ -77,7 +77,7 @@ export default function MemoryLibraryPage() {
     <div>
       <PageHeader
         title="Memory Library"
-        subtitle="Interaction recordings and memory timeline captured by NeuroLens"
+        subtitle="Conversation summaries and interaction recordings captured by NeuroLens"
       />
 
       {isLoading ? (
@@ -93,7 +93,7 @@ export default function MemoryLibraryPage() {
           <div className="space-y-1">
             <h3 className="text-base font-bold text-foreground">Zero Memories Recorded Yet</h3>
             <p className="text-sm text-muted-foreground max-w-md mx-auto">
-              NeuroLens only creates memories from real interactions. When a registered person is recognized in front of the client's camera, the system will automatically record their first interaction and save Memory 001 here.
+              Conversation summaries are created when NeuroLens hears you speaking with a recognized person. The first recognized interaction can also include a video recording.
             </p>
           </div>
         </div>
@@ -112,7 +112,7 @@ export default function MemoryLibraryPage() {
                 className="overflow-hidden rounded-3xl bg-card shadow-sm ring-1 ring-border/60 flex flex-col justify-between"
               >
                 <div>
-                  {/* Video Player */}
+                  {/* Recording or conversation summary */}
                   <div className="relative aspect-video bg-black rounded-t-3xl overflow-hidden flex items-center justify-center">
                     {videoSrc ? (
                       <video
@@ -124,12 +124,12 @@ export default function MemoryLibraryPage() {
                       />
                     ) : (
                       <div className="flex flex-col items-center justify-center text-muted-foreground">
-                        <Video className="h-10 w-10 opacity-40 mb-2" />
-                        <span className="text-xs">No video stream</span>
+                        <Sparkles className="h-10 w-10 opacity-40 mb-2" />
+                        <span className="text-xs">Conversation summary</span>
                       </div>
                     )}
                     <span className="absolute left-3 top-3 rounded-full bg-black/60 backdrop-blur px-2.5 py-0.5 text-[10px] font-bold text-white uppercase tracking-wider">
-                      {m.duration ? `${m.duration}s recording` : "Interaction"}
+                      {m.type === "CONVERSATION" ? "Conversation" : m.duration ? `${m.duration}s recording` : "Interaction"}
                     </span>
                   </div>
 

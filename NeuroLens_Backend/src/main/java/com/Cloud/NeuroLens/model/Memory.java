@@ -1,9 +1,12 @@
 package com.Cloud.NeuroLens.model;
 
 import lombok.*;
-import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.index.Indexed;
-import org.springframework.data.mongodb.core.mapping.Document;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+import jakarta.persistence.Column;
 
 import java.time.LocalDateTime;
 
@@ -12,22 +15,23 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-@Document(collection = "memories")
+@Entity
+@Table(name = "memories")
 public class Memory {
 
     @Id
+    @GeneratedValue(strategy = GenerationType.UUID)
     private String id;
 
-    @Indexed
     private String clientId;
 
-    @Indexed
     private String personId;
 
     private String personName;
     private String relationship;
 
     private String title;
+    @Column(columnDefinition = "text")
     private String description;
     private String emotion;
 
@@ -37,7 +41,6 @@ public class Memory {
     private String type; // e.g. "VIDEO", "INTERACTION_VIDEO"
     private String status; // e.g. "SAVED"
 
-    @Indexed
     private LocalDateTime timestamp;
 
     private String createdAt;

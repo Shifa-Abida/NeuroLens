@@ -12,6 +12,7 @@ export default function PeopleDatabasePage() {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   // Registration Form States
   const [name, setName] = useState("")
@@ -64,6 +65,7 @@ export default function PeopleDatabasePage() {
 
   const loadPeople = async () => {
     setIsLoading(true)
+    setLoadError(null)
     try {
       const apiPeople = await getPeople()
       setPeople(apiPeople)
@@ -82,7 +84,8 @@ export default function PeopleDatabasePage() {
       )
       setMemoriesCountMap(counts)
     } catch (err) {
-      console.error("Failed to load people from API:", err)
+      console.warn("Failed to load people from API:", err)
+      setLoadError("Could not load people. Confirm the backend is running and MongoDB is reachable.")
       setPeople([])
     } finally {
       setIsLoading(false)
@@ -154,10 +157,12 @@ export default function PeopleDatabasePage() {
     }
 
     setIsSubmitting(true)
+    let photoUploaded = false
     try {
       // 1. Upload reference photo to Spring Boot
       const uploadRes = await uploadPhoto(selectedFile)
       const photoUrl = uploadRes.photoUrl
+      photoUploaded = true
 
       // 2. Create person record with face embedding in Spring Boot & MongoDB
       await createPerson({
@@ -185,7 +190,9 @@ export default function PeopleDatabasePage() {
       await loadPeople()
     } catch (err) {
       console.error(err)
-      setError("Failed to register person. Ensure backend server is running.")
+      setError(photoUploaded
+        ? "Photo uploaded, but the person profile could not be saved. Check the backend and MongoDB connection."
+        : "Photo upload failed. Ensure the backend server is running.")
     } finally {
       setIsSubmitting(false)
     }
@@ -208,6 +215,21 @@ export default function PeopleDatabasePage() {
         title="People Database"
         subtitle="Registered family members and trusted contacts"
       />
+
+      {loadError && (
+        <div role="alert" className="mb-5 flex items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-800">
+          <AlertCircle className="h-5 w-5 flex-shrink-0" />
+          <p className="flex-1">{loadError}</p>
+          <button
+            type="button"
+            onClick={loadPeople}
+            disabled={isLoading}
+            className="rounded-lg border border-amber-600/30 px-3 py-1.5 font-semibold hover:bg-amber-500/10 disabled:opacity-50"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border/60 sm:p-8">
         <div className="flex items-center justify-between">
@@ -351,7 +373,7 @@ export default function PeopleDatabasePage() {
                   Reference Photo <span className="text-destructive">*</span>
                 </label>
                 <p className="text-xs text-muted-foreground mb-2">
-                  This photo is Sarah's identity reference. NeuroLens will detect the face and store the embedding to recognize her in real life.
+                  NeuroLens will detect the face and save its embedding with this person's profile.
                 </p>
 
                 <div className="flex items-center gap-4">
@@ -414,7 +436,7 @@ export default function PeopleDatabasePage() {
                   id="name-input"
                   type="text"
                   required
-                  placeholder="e.g. Sarah"
+                  placeholder="Enter full name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="mt-1.5 w-full rounded-2xl bg-secondary/50 border border-border px-4 py-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
@@ -429,7 +451,7 @@ export default function PeopleDatabasePage() {
                   id="relation-input"
                   type="text"
                   required
-                  placeholder="e.g. Friend, Daughter, Brother"
+                  placeholder="Enter relationship"
                   value={relationship}
                   onChange={(e) => setRelationship(e.target.value)}
                   className="mt-1.5 w-full rounded-2xl bg-secondary/50 border border-border px-4 py-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
@@ -442,7 +464,7 @@ export default function PeopleDatabasePage() {
                 </label>
                 <textarea
                   id="notes-input"
-                  placeholder="e.g. Lives nearby. Loves gardening."
+                  placeholder="Optional details to remember"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                   rows={2}

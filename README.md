@@ -1,12 +1,12 @@
 # NeuroLens
 
 ## 📖 Project Overview
-NeuroLens is a **real‑time video‑analysis platform** that uses a webcam to capture video, detects faces, extracts facial embeddings, and provides AI‑generated summaries of the captured content. The system combines a modern **React/Next.js** front‑end with a **Spring Boot** back‑end, stores user data in **MongoDB**, and communicates via **WebSocket** for low‑latency updates.
+NeuroLens is a **real‑time video‑analysis platform** that uses a webcam to capture video, detects faces, extracts facial embeddings, and provides AI‑generated summaries of the captured content. The system combines a modern **React/Next.js** front‑end with a **Spring Boot** back‑end, stores user data in **PostgreSQL**, and communicates via **WebSocket** for low‑latency updates.
 
 ---
 
 ## 🛠️ Tech Stack
-The full tech‑stack is documented in **[TECH_STACK.md](TECH_STACK.md)**, but the core components are:
+The full tech‑stack is documented in **[TECH_STACK.md](TECH_STACK.md)**, but the core components are
 
 - **Frontend**: React.js, Next.js
 - **Styling**: Tailwind CSS
@@ -14,7 +14,7 @@ The full tech‑stack is documented in **[TECH_STACK.md](TECH_STACK.md)**, but t
 - **Face Detection**: MediaPipe, face‑api.js
 - **Face Recognition**: face‑api.js embeddings
 - **Backend**: Spring Boot (Java)
-- **Database**: MongoDB
+- **Database**: PostgreSQL
 - **Real‑time Updates**: WebSocket
 - **Speech‑to‑Text**: Web Speech API
 - **AI Summary**: OpenAI API / Gemini API
@@ -27,7 +27,7 @@ The full tech‑stack is documented in **[TECH_STACK.md](TECH_STACK.md)**, but t
 ### Prerequisites
 - **Node.js** (v20 or later) and **npm** (or pnpm) installed
 - **Java 25** and **Maven** installed
-- **MongoDB** instance running locally or remotely
+- **PostgreSQL** instance running locally or remotely
 - An **OpenAI** or **Gemini** API key (set in environment variables)
 
 ### Clone the repository
@@ -53,20 +53,12 @@ pnpm dev   # starts Next.js on http://localhost:3000
 ```
 
 ### Environment variables
-Configure frontend keys in `.env.local`. Set the Spring Boot MongoDB URI in the backend process environment; Spring Boot reads `SPRING_MONGODB_URI` and falls back to local MongoDB when it is unset.
+For conversation summaries, set the server-only Gemini key in `ar-interface/.env.local`, then restart the AR interface. Do not use a `NEXT_PUBLIC_` prefix:
 
-For Atlas, use the URI from Atlas **Connect → Drivers**, replace its placeholders locally, and allow your client IP in the Atlas network access list:
 ```
-NEXT_PUBLIC_OPENAI_API_KEY=your_openai_key
-NEXT_PUBLIC_GEMINI_API_KEY=your_gemini_key
-SPRING_MONGODB_URI=mongodb+srv://<db-user>:<db-password>@<cluster-host>/neurodb?retryWrites=true&w=majority
+GEMINI_API_KEY=your_gemini_key
 ```
-Never commit the Atlas URI or share it publicly. For PowerShell, set it in the backend terminal before starting the API:
-
-```powershell
-$env:SPRING_MONGODB_URI = 'mongodb+srv://<db-user>:<db-password>@<cluster-host>/neurodb?retryWrites=true&w=majority'
-./mvnw.cmd spring-boot:run
-```
+Never commit API keys or database credentials. The backend connects to PostgreSQL using `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, and `SPRING_DATASOURCE_PASSWORD`.
 
 ---
 
@@ -74,7 +66,7 @@ $env:SPRING_MONGODB_URI = 'mongodb+srv://<db-user>:<db-password>@<cluster-host>/
 1. Open the **AR Interface** (`http://localhost:3000`) in a browser that supports WebRTC.
 2. Grant camera permissions.
 3. The app streams video, detects faces, and shows real‑time bounding boxes.
-4. Detected face embeddings are sent to the back‑end, stored in MongoDB, and can be queried for recognition.
+4. Detected face embeddings are sent to the back‑end, stored in PostgreSQL, and can be queried for recognition.
 5. Speech captured via the Web Speech API is transcribed and fed to the AI summarizer, which returns a concise text summary displayed to the user.
 
 ---
