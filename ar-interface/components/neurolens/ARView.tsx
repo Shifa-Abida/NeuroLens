@@ -759,20 +759,31 @@ export function ARView() {
 
   // AUTOMATIC RECORDING IMPLEMENTATION (STATE MACHINE)
   const startFirstEncounterRecording = useCallback((person: Person) => {
-    // 1. Guard check state - do not start if already recording or processing
+    // ── SINGLE-FLIGHT GUARD ──────────────────────────────────────────
+    // 1a. If we have EVER recorded this person in this session, refuse.
+    if (recordedPersonIdsRef.current.has(person.id)) {
+      console.log(`[NEUROLENS][GUARD] Recording BLOCKED — already recorded for ${person.name} (${person.id})`)
+      return
+    }
+
+    // 1b. If the recording lock is held (any stage of the pipeline), refuse.
+    if (isRecordingLockRef.current) {
+      console.log(`[NEUROLENS][GUARD] Recording BLOCKED — isRecordingLockRef is TRUE`)
+      return
+    }
+
+    // 1c. Guard on state — only start from idle-ish states
     if (
       recordingStateRef.current === "RECORDING" ||
       recordingStateRef.current === "STOPPING" ||
       recordingStateRef.current === "BLOB_CREATED" ||
       recordingStateRef.current === "VALIDATING_BLOB" ||
-      recordingStateRef.current === "UPLOADING"
+      recordingStateRef.current === "UPLOADING" ||
+      recordingStateRef.current === "BACKEND_CONFIRMED" ||
+      recordingStateRef.current === "SAVED" ||
+      recordingStateRef.current === "COOLDOWN"
     ) {
-      console.log(`[NEUROLENS] Recording skipped: already in progress (${recordingStateRef.current})`)
-      return
-    }
-
-    if (recordedPersonIdsRef.current.has(person.id)) {
-      console.log(`[NEUROLENS] Recording skipped: encounter already recorded for ${person.name} (${person.id})`)
+      console.log(`[NEUROLENS][GUARD] Recording BLOCKED — state is ${recordingStateRef.current}`)
       return
     }
 
@@ -805,6 +816,13 @@ export function ARView() {
       return
     }
 
+    // ── ACQUIRE LOCK IMMEDIATELY ─────────────────────────────────────
+    // Mark person as recorded BEFORE any async work so no parallel
+    // recognition callback can start a second recorder.
+    isRecordingLockRef.current = true
+    recordedPersonIdsRef.current.add(person.id)
+    console.log(`[NEUROLENS][LOCK] Lock acquired + person ${person.id} added to recordedPersonIds`)
+
     // 3. Supported MIME type detection
     let mimeType = 'video/webm;codecs=vp8,opus'
     if (typeof MediaRecorder !== 'undefined') {
@@ -817,6 +835,8 @@ export function ARView() {
     } else {
       console.error("[NEUROLENS] MediaRecorder API unsupported in this browser.")
       setRecordingError("MediaRecorder API unsupported in this browser.")
+      isRecordingLockRef.current = false
+      recordedPersonIdsRef.current.delete(person.id)
       return
     }
 
@@ -838,25 +858,30 @@ export function ARView() {
         }
       }
 
-      // 6. Handle stop & upload
+      // 6. Handle stop & upload — THE FINAL dataavailable fires BEFORE onstop (per MDN spec)
       recorder.onstop = async () => {
+        console.log("[NEUROLENS][PIPELINE] recorder.onstop fired")
         setControlledRecordingState("BLOB_CREATED")
-        console.log("[NEUROLENS] RECORDING STOPPING")
 
         const finalMime = recorder.mimeType || mimeType || 'video/webm'
         const recordedBlob = new Blob(recordedChunksRef.current, { type: finalMime })
 
-        console.log("[NEUROLENS] FINAL BLOB CREATED")
-        console.log("[NEUROLENS] BLOB SIZE:", recordedBlob.size)
-        console.log("[NEUROLENS] BLOB MIME TYPE:", recordedBlob.type)
+        console.log("[NEUROLENS][PIPELINE] FINAL BLOB CREATED")
+        console.log("[NEUROLENS][PIPELINE] BLOB SIZE:", recordedBlob.size)
+        console.log("[NEUROLENS][PIPELINE] BLOB MIME TYPE:", recordedBlob.type)
 
         // Validate Blob
         setControlledRecordingState("VALIDATING_BLOB")
         if (recordedBlob.size === 0) {
-          console.error("RECORDING FAILED: EMPTY VIDEO BLOB")
+          console.error("[NEUROLENS][PIPELINE] RECORDING FAILED: EMPTY VIDEO BLOB")
           setRecordingError("RECORDING FAILED: EMPTY VIDEO BLOB")
-          setControlledRecordingState("IDLE")
+          // Keep person in recordedPersonIdsRef so it won't retrigger
           activeRecordingPersonIdRef.current = null
+          setControlledRecordingState("SAVED") // Prevent retrigger
+          setTimeout(() => {
+            setControlledRecordingState("IDLE")
+            isRecordingLockRef.current = false
+          }, 5000)
           flushPendingConversationRef.current(true)
           return
         }
@@ -896,7 +921,7 @@ export function ARView() {
 
         // Upload to Spring Boot
         setControlledRecordingState("UPLOADING")
-        console.log("[NEUROLENS] UPLOADING VIDEO")
+        console.log("[NEUROLENS][PIPELINE] UPLOADING VIDEO to backend...")
 
         const formData = new FormData()
         formData.append("video", recordedBlob, `recording_${person.id}_${Date.now()}.webm`)
@@ -910,20 +935,22 @@ export function ARView() {
 
         try {
           const res = await uploadRecordedMemory(formData)
-          console.log("[NEUROLENS] UPLOAD SUCCESS")
-          console.log("[NEUROLENS] BACKEND VIDEO URL:", res.videoUrl)
-          console.log("[NEUROLENS] MEMORY SAVED SUCCESSFULLY")
+          console.log("[NEUROLENS][PIPELINE] UPLOAD SUCCESS")
+          console.log("[NEUROLENS][PIPELINE] BACKEND VIDEO URL:", res.videoUrl)
+          console.log("[NEUROLENS][PIPELINE] BACKEND MEMORY ID:", res.id || res.memoryId)
 
           setSavedMemoryId(res.id || res.memoryId || "memory_001")
           setControlledRecordingState("BACKEND_CONFIRMED")
           setControlledRecordingState("SAVED")
 
-          // Mark person encounter as recorded
-          recordedPersonIdsRef.current.add(person.id)
-
-          // Replace temporary memory with persisted memory, keeping local blob URL as reliable backup
+          // Replace temporary memory with persisted memory
           const persistedMemory = mapMemoryResponse(res, 0)
-          persistedMemory.video = resolveMediaUrl(res.videoUrl) || localVideoUrl
+          // Use backend URL as primary, blob URL as fallback
+          const resolvedBackendUrl = resolveMediaUrl(res.videoUrl)
+          persistedMemory.video = resolvedBackendUrl || localVideoUrl
+          persistedMemory.thumbnail = resolvedBackendUrl || localVideoUrl
+
+          console.log("[NEUROLENS][PIPELINE] Persisted memory video URL:", persistedMemory.video)
 
           setMatchedPerson((prev) => {
             if (!prev) return prev
@@ -938,50 +965,70 @@ export function ARView() {
 
           window.dispatchEvent(new CustomEvent('neurolens-play-memory', { detail: persistedMemory }))
 
-          // Refresh person profile from backend
+          // Refresh person profile from backend — preserve video memory even if backend
+          // fetch doesn't return a resolved videoUrl
           setTimeout(async () => {
             try {
               const updatedPerson = await getRecognizedPerson(person.id)
               if (updatedPerson && updatedPerson.memories) {
-                // Ensure the persisted video memory stays present and playable
-                const hasVid = updatedPerson.memories.some((m) => Boolean(m.video))
-                if (!hasVid) {
-                  updatedPerson.memories.unshift(persistedMemory)
+                // Ensure every memory that has a videoUrl gets it properly resolved
+                const enrichedMemories = updatedPerson.memories.map((m) => {
+                  if (m.video) return m
+                  // Check if this is the persisted memory by ID match
+                  if (m.id === persistedMemory.id || m.id === (res.id || res.memoryId)) {
+                    return { ...m, video: persistedMemory.video, thumbnail: persistedMemory.thumbnail }
+                  }
+                  return m
+                })
+                // If the persisted video memory is still missing, prepend it
+                const hasPersistedVid = enrichedMemories.some((m) => m.id === persistedMemory.id || (m.video && m.video === persistedMemory.video))
+                if (!hasPersistedVid) {
+                  enrichedMemories.unshift(persistedMemory)
                 }
+                updatedPerson.memories = enrichedMemories
                 matchedPersonRef.current = updatedPerson
                 setMatchedPerson(updatedPerson)
               }
             } catch (err) {
-              console.warn("Could not reload updated person memories:", err)
+              console.warn("[NEUROLENS][PIPELINE] Could not reload updated person memories:", err)
             }
-          }, 500)
+          }, 1000)
 
-          // Enter cooldown before returning to IDLE
+          // Enter cooldown — lock is released ONLY after cooldown completes
+          console.log("[NEUROLENS][PIPELINE] Entering COOLDOWN (lock held for 7 more seconds)")
+          activeRecordingPersonIdRef.current = null
+          flushPendingConversationRef.current(true)
           setTimeout(() => {
             setControlledRecordingState("COOLDOWN")
             setTimeout(() => {
               setControlledRecordingState("IDLE")
+              isRecordingLockRef.current = false
+              console.log("[NEUROLENS][PIPELINE] Recording workflow COMPLETE — lock released, state IDLE")
+              console.log("[NEUROLENS][PIPELINE] Person", person.id, "remains in recordedPersonIdsRef — will NOT re-record")
             }, 4000)
           }, 3000)
 
         } catch (uploadErr) {
-          console.error("[NEUROLENS] Memory upload failed:", uploadErr)
+          console.error("[NEUROLENS][PIPELINE] Memory upload failed:", uploadErr)
           setRecordingError("Memory upload to backend failed.")
-          setControlledRecordingState("IDLE")
-        } finally {
+          // Keep person in recordedPersonIdsRef so it won't retrigger
+          // The video was recorded, upload just failed — don't loop
           activeRecordingPersonIdRef.current = null
-          isRecordingLockRef.current = false
           flushPendingConversationRef.current(true)
+          setControlledRecordingState("SAVED") // Prevent re-entry
+          setTimeout(() => {
+            setControlledRecordingState("IDLE")
+            isRecordingLockRef.current = false
+          }, 5000)
         }
       }
 
       // 7. Start recording
       activeRecordingPersonIdRef.current = person.id
-      isRecordingLockRef.current = true
       setControlledRecordingState("RECORDING")
       recorder.start(1000) // collect slice every 1000ms
       console.log(
-        `[NEUROLENS] 15-SECOND RECORDING STARTED at ${new Date().toISOString()} | VideoTracks: ${videoTracks.length} | AudioTracks: ${audioTracks.length} | MIME: ${recorder.mimeType}`
+        `[NEUROLENS][PIPELINE] 15-SECOND RECORDING STARTED at ${new Date().toISOString()} | VideoTracks: ${videoTracks.length} | AudioTracks: ${audioTracks.length} | MIME: ${recorder.mimeType}`
       )
 
       // 8. 15-second countdown timer
@@ -1001,7 +1048,7 @@ export function ARView() {
       if (recordingTimerRef.current) clearTimeout(recordingTimerRef.current)
       recordingTimerRef.current = setTimeout(() => {
         if (recorder.state === "recording") {
-          console.log("[NEUROLENS] 15000ms reached — calling recorder.stop()")
+          console.log("[NEUROLENS][PIPELINE] 15000ms reached — calling recorder.stop()")
           recorder.stop()
         }
       }, 15000)
@@ -1012,6 +1059,7 @@ export function ARView() {
       setControlledRecordingState("IDLE")
       activeRecordingPersonIdRef.current = null
       isRecordingLockRef.current = false
+      recordedPersonIdsRef.current.delete(person.id)
       flushPendingConversationRef.current(true)
     }
   }, [])
@@ -1063,12 +1111,16 @@ export function ARView() {
           if (absenceMs > 6000) {
             // Encounter reset: person has been absent >6s
             if (activeEncounterPersonIdRef.current !== null) {
-              console.log(`[NEUROLENS] ENCOUNTER ENDED — ${activeEncounterPersonIdRef.current} absent for ${Math.round(absenceMs / 1000)}s`)
+              const departedPersonId = activeEncounterPersonIdRef.current
+              console.log(`[NEUROLENS] ENCOUNTER ENDED — ${departedPersonId} absent for ${Math.round(absenceMs / 1000)}s`)
               activeEncounterPersonIdRef.current = null
-              encounterRecordedRef.current = false
+              // Only reset encounterRecordedRef if this person was NOT already recorded in this session!
+              if (!recordedPersonIdsRef.current.has(departedPersonId)) {
+                encounterRecordedRef.current = false
+              }
             }
             lastGreetedPersonIdRef.current = null
-            if (recordingStateRef.current === "IDLE") {
+            if (recordingStateRef.current === "IDLE" && !isRecordingLockRef.current) {
               matchedPersonRef.current = null
               setMatchedPerson(null)
               setIsUnknown(false)
@@ -1153,7 +1205,9 @@ export function ARView() {
                   if (activeEncounterPersonIdRef.current !== res.person.id) {
                     console.log(`[NeuroLens] NEW REGISTERED ENCOUNTER started for ${res.person.name} (${res.person.id})`)
                     activeEncounterPersonIdRef.current = res.person.id
-                    encounterRecordedRef.current = false
+                    if (!recordedPersonIdsRef.current.has(res.person.id)) {
+                      encounterRecordedRef.current = false
+                    }
                   }
 
                   if (
@@ -1163,7 +1217,7 @@ export function ARView() {
                   ) {
                     setControlledRecordingState("PERSON_RECOGNIZED")
 
-                    if (!encounterRecordedRef.current && !isRecordingLockRef.current) {
+                    if (!encounterRecordedRef.current && !isRecordingLockRef.current && !recordedPersonIdsRef.current.has(res.person.id)) {
                       encounterRecordedRef.current = true
                       console.log("[NeuroLens][Recording] START — 15-second recording for registered person", res.person.name)
                       startFirstEncounterRecording(res.person)
@@ -1192,14 +1246,16 @@ export function ARView() {
                   if (activeEncounterPersonIdRef.current !== res.person.id) {
                     console.log(`[NeuroLens] RETURNING VISITOR ENCOUNTER started for ${res.person.name} (${res.person.id})`)
                     activeEncounterPersonIdRef.current = res.person.id
-                    encounterRecordedRef.current = false
+                    if (!recordedPersonIdsRef.current.has(res.person.id)) {
+                      encounterRecordedRef.current = false
+                    }
                   }
 
                   if (
                     recordingStateRef.current === "IDLE" ||
                     recordingStateRef.current === "PERSON_DETECTED"
                   ) {
-                    if (!encounterRecordedRef.current && !isRecordingLockRef.current) {
+                    if (!encounterRecordedRef.current && !isRecordingLockRef.current && !recordedPersonIdsRef.current.has(res.person.id)) {
                       encounterRecordedRef.current = true
                       console.log("[NeuroLens][Recording] START — 15-second recording for returning unknown visitor", res.person.name)
                       startFirstEncounterRecording(res.person)
@@ -1280,7 +1336,12 @@ export function ARView() {
     return () => {
       active = false
     }
-  }, [isFaceApiLoaded, matchedPerson, isUnknown, startFirstEncounterRecording])
+  // CRITICAL: Do NOT include matchedPerson in deps — it causes the frame
+  // loop to restart on every setMatchedPerson call, creating detection gaps
+  // that trigger encounter resets and recording loops. matchedPersonRef is
+  // used inside the loop instead for up-to-date values.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFaceApiLoaded, startFirstEncounterRecording])
 
   // Snapshot handler for manual enrollment
   const handleCaptureSnapshot = () => {
@@ -1342,7 +1403,8 @@ export function ARView() {
       setConfidence(98.5)
 
       // Start automatic first encounter recording immediately for newly enrolled person
-      if (recordingStateRef.current === "IDLE") {
+      if (recordingStateRef.current === "IDLE" && !isRecordingLockRef.current && !recordedPersonIdsRef.current.has(newPerson.id)) {
+        encounterRecordedRef.current = true
         startFirstEncounterRecording(newPerson)
       }
     } catch (err) {
