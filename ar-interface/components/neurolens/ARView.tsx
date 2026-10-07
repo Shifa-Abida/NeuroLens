@@ -5,6 +5,9 @@ import { MemoryReplayEngine } from './MemoryReplayEngine'
 import { getRecognizedPerson, recognizeFace, registerPerson, saveMemory, summarizeConversation, updatePersonProfile, uploadRecordedMemory, resolveMediaUrl } from '@/lib/api'
 import type { Person, Memory } from './types'
 import { Camera, UserPlus, Sparkles, AlertCircle, Scan, Volume2, Heart, MessageSquare, Calendar, Clock, Eye, Wifi, Battery, Shield, User, Video, CheckCircle2, Loader2, Play } from 'lucide-react'
+import { GestureManager } from './gesture/GestureManager'
+import { ARVirtualCursor } from './gesture/ARVirtualCursor'
+import type { GestureType } from './gesture/gestureTypes'
 
 type RecordingState =
   | "IDLE"
@@ -129,6 +132,115 @@ export function ARView() {
     recordingStateRef.current = state
     setRecordingState(state)
   }
+
+  // GESTURE NAVIGATION INTEGRATION STATE & REFS
+  const gestureManagerRef = useRef<GestureManager | null>(null)
+  const isVideoPlayingRef = useRef<boolean>(false)
+  const [isHandTrackingReady, setIsHandTrackingReady] = useState<boolean>(false)
+  const [volumeLevel, setVolumeLevel] = useState<number>(1.0)
+  const [volumeNoticeVisible, setVolumeNoticeVisible] = useState<boolean>(false)
+  const volumeTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const [gestureState, setGestureState] = useState<{
+    gesture: GestureType
+    cursorFrozen: boolean
+    scrollModeEnabled: boolean
+    activeHands: number
+  }>({
+    gesture: "IDLE",
+    cursorFrozen: false,
+    scrollModeEnabled: false,
+    activeHands: 0,
+  })
+
+  // Listen to volume updates & video playing state from MemoryReplayEngine
+  useEffect(() => {
+    const handleVideoPlaying = (e: CustomEvent<{ isPlaying: boolean }>) => {
+      isVideoPlayingRef.current = e.detail.isPlaying
+    }
+    const handleVolumeUpdated = (e: CustomEvent<{ volume: number }>) => {
+      setVolumeLevel(e.detail.volume)
+      setVolumeNoticeVisible(true)
+      if (volumeTimerRef.current) clearTimeout(volumeTimerRef.current)
+      volumeTimerRef.current = setTimeout(() => {
+        setVolumeNoticeVisible(false)
+      }, 2000)
+    }
+
+    window.addEventListener('neurolens-video-playing' as any, handleVideoPlaying)
+    window.addEventListener('neurolens-volume-updated' as any, handleVolumeUpdated)
+
+    return () => {
+      window.removeEventListener('neurolens-video-playing' as any, handleVideoPlaying)
+      window.removeEventListener('neurolens-volume-updated' as any, handleVolumeUpdated)
+    }
+  }, [])
+
+  // Initialize GestureManager using existing camera stream & video element
+  useEffect(() => {
+    const manager = new GestureManager({
+      onCursorMove: (x, y, hovering) => {
+        window.dispatchEvent(new CustomEvent('neurolens-cursor-move', {
+          detail: { x, y, hovering }
+        }))
+      },
+      onClick: () => {
+        window.dispatchEvent(new CustomEvent('neurolens-cursor-click'))
+      },
+      onScrollModeChange: (enabled) => {
+        window.dispatchEvent(new CustomEvent('neurolens-scroll-mode', {
+          detail: { enabled }
+        }))
+        setGestureState((prev) => ({ ...prev, scrollModeEnabled: enabled }))
+      },
+      onVolumeChange: (delta) => {
+        window.dispatchEvent(new CustomEvent('neurolens-volume-change', {
+          detail: { delta }
+        }))
+      },
+      onGestureStateChange: (state) => {
+        setGestureState(state)
+      },
+      isVideoPlaying: () => isVideoPlayingRef.current,
+    })
+
+    manager.init().then((success) => {
+      if (success) {
+        gestureManagerRef.current = manager
+        setIsHandTrackingReady(true)
+      }
+    })
+
+    return () => {
+      gestureManagerRef.current = null
+    }
+  }, [])
+
+  // Dedicated real-time Hand Tracking frame processing loop (runs concurrently with face detection)
+  useEffect(() => {
+    let active = true
+    let lastProcessed = 0
+
+    const handLoop = (timestamp: number) => {
+      if (!active) return
+
+      const video = cameraVideoRef.current
+      if (video && video.readyState >= 2 && gestureManagerRef.current) {
+        // Run hand tracking at up to ~45-60 fps without blocking face detection
+        if (timestamp - lastProcessed >= 22) {
+          lastProcessed = timestamp
+          gestureManagerRef.current.processFrame(video, timestamp)
+        }
+      }
+
+      requestAnimationFrame(handLoop)
+    }
+
+    const animId = requestAnimationFrame(handLoop)
+    return () => {
+      active = false
+      cancelAnimationFrame(animId)
+    }
+  }, [])
 
   const saveConversationSummary = useCallback(async (conversation: PendingConversation) => {
     setCaptionStatus(`Summarizing your conversation with ${conversation.personName}...`)
@@ -1099,6 +1211,44 @@ export function ARView() {
           )}
         </div>
 
+        {/* Gesture Recognition Status Badge */}
+        <div className="flex items-center gap-2 bg-slate-900/70 border border-white/10 rounded-full px-3.5 py-1.5 shadow-inner">
+          <span
+            className={`w-2 h-2 rounded-full ${
+              !isHandTrackingReady
+                ? "bg-slate-500 animate-pulse"
+                : gestureState.gesture !== "IDLE"
+                ? "bg-cyan-400 animate-ping"
+                : "bg-cyan-500/70"
+            }`}
+          />
+          <span className="text-xs font-bold tracking-wider text-slate-300">
+            GESTURE:{" "}
+            <span className="text-cyan-300 font-mono">
+              {gestureState.gesture === "ONE_INDEX"
+                ? "☝️ CURSOR"
+                : gestureState.gesture === "ONE_OPEN_PALM"
+                ? "🤚 PAUSED"
+                : gestureState.gesture === "TWO_OPEN_PALMS"
+                ? "🤚🤚 SCROLL ON"
+                : gestureState.gesture === "TWO_PEACE"
+                ? "✌️✌️ SCROLL OFF"
+                : gestureState.gesture === "PINCH"
+                ? "👌 CLICK"
+                : gestureState.gesture === "THUMBS_UP"
+                ? "👍 VOL+"
+                : gestureState.gesture === "THUMBS_DOWN"
+                ? "👎 VOL-"
+                : "READY"}
+            </span>
+          </span>
+          {gestureState.scrollModeEnabled && (
+            <span className="ml-1 bg-emerald-600/80 text-white text-[9px] font-bold px-2 py-0.5 rounded-full">
+              SCROLL ON
+            </span>
+          )}
+        </div>
+
         {/* Right Status Indicators */}
         <div className="flex items-center gap-6 text-sm text-slate-300 font-medium">
           <span>{dateStr}</span>
@@ -1543,7 +1693,10 @@ export function ARView() {
               </span>
 
               {matchedPerson && matchedPerson.memories && matchedPerson.memories.length > 0 ? (
-                <MemoryReplayEngine memories={matchedPerson.memories} />
+                <MemoryReplayEngine
+                  memories={matchedPerson.memories}
+                  scrollModeEnabled={gestureState.scrollModeEnabled}
+                />
               ) : isFirstEncounter ? (
                 /* FIRST ENCOUNTER: 0 PREVIOUS MEMORIES */
                 <div className="flex-1 flex flex-col items-center justify-center text-center p-6 space-y-4">
@@ -1625,6 +1778,16 @@ export function ARView() {
           <span>All Vision & Audio Systems Active</span>
         </div>
       </footer>
+
+      {/* 4. VIRTUAL AR CURSOR & HUD OVERLAYS */}
+      <ARVirtualCursor
+        currentGesture={gestureState.gesture}
+        cursorFrozen={gestureState.cursorFrozen}
+        scrollModeEnabled={gestureState.scrollModeEnabled}
+        volumeLevel={volumeLevel}
+        volumeNoticeVisible={volumeNoticeVisible}
+        activeHands={gestureState.activeHands}
+      />
     </div>
   )
 }
