@@ -23,8 +23,14 @@ public class WebConfig implements WebMvcConfigurer {
             dir.mkdirs();
         }
 
-        registry.addResourceHandler("/media/**")
-                .addResourceLocations(uploadPath.toUri().toString())
+        String location = uploadPath.toUri().toString();
+        if (!location.endsWith("/")) {
+            location += "/";
+        }
+
+        registry.addResourceHandler("/media/**", "/api/media/**")
+                .addResourceLocations(location)
                 .setCachePeriod(0);
     }
 }
+
