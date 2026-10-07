@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { MemoryReplayEngine } from './MemoryReplayEngine'
-import { getRecognizedPerson, recognizeFace, registerPerson, saveMemory, summarizeConversation, updatePersonProfile, uploadRecordedMemory, resolveMediaUrl } from '@/lib/api'
+import { getRecognizedPerson, recognizeFace, registerPerson, saveMemory, summarizeConversation, updatePersonProfile, uploadRecordedMemory, resolveMediaUrl, mapMemoryResponse } from '@/lib/api'
 import type { Person, Memory } from './types'
 import { Camera, UserPlus, Sparkles, AlertCircle, Scan, Volume2, Heart, MessageSquare, Calendar, Clock, Eye, Wifi, Battery, Shield, User, Video, CheckCircle2, Loader2, Play } from 'lucide-react'
 import { GestureManager } from './gesture/GestureManager'
@@ -86,7 +86,7 @@ export function ARView() {
 
   // Recording State Machine
   const [recordingState, setRecordingState] = useState<RecordingState>("IDLE")
-  const [recordingCountdown, setRecordingCountdown] = useState<number>(15)
+  const [recordingCountdown, setRecordingCountdown] = useState<number>(7)
   const [recordingError, setRecordingError] = useState<string | null>(null)
   const [savedMemoryId, setSavedMemoryId] = useState<string | null>(null)
 
@@ -750,9 +750,15 @@ export function ARView() {
 
   // AUTOMATIC RECORDING IMPLEMENTATION (STATE MACHINE)
   const startFirstEncounterRecording = useCallback((person: Person) => {
-    // 1. Guard check state
-    if (recordingStateRef.current !== "IDLE") {
-      console.log(`[NEUROLENS] Recording skipped: current state is ${recordingStateRef.current}`)
+    // 1. Guard check state - do not start if already recording or processing
+    if (
+      recordingStateRef.current === "RECORDING" ||
+      recordingStateRef.current === "STOPPING" ||
+      recordingStateRef.current === "BLOB_CREATED" ||
+      recordingStateRef.current === "VALIDATING_BLOB" ||
+      recordingStateRef.current === "UPLOADING"
+    ) {
+      console.log(`[NEUROLENS] Recording skipped: already in progress (${recordingStateRef.current})`)
       return
     }
 
@@ -846,6 +852,39 @@ export function ARView() {
           return
         }
 
+        // IMMEDIATELY create a local URL from the real 7-second recorded video blob
+        const localVideoUrl = URL.createObjectURL(recordedBlob)
+
+        const immediateMemory: Memory = {
+          id: `recording-${person.id}-${Date.now()}`,
+          personId: person.id,
+          title: `7s Interaction with ${person.name}`,
+          date: "Just now",
+          timestamp: new Date().toISOString(),
+          location: "Living Room",
+          description: `7-second interaction recording captured on ${new Date().toLocaleTimeString()}`,
+          image: "/placeholder.jpg",
+          emoji: "🎥",
+          emotionalImportance: 10,
+          video: localVideoUrl,
+          thumbnail: localVideoUrl,
+        }
+
+        // Immediately update matchedPerson state so the 7-second video is active in memory
+        setMatchedPerson((prev) => {
+          if (!prev) return prev
+          const existing = prev.memories || []
+          const updated = {
+            ...prev,
+            memories: [immediateMemory, ...existing],
+          }
+          matchedPersonRef.current = updated
+          return updated
+        })
+
+        // Dispatch play event to immediately activate video playback on the right!
+        window.dispatchEvent(new CustomEvent('neurolens-play-memory', { detail: immediateMemory }))
+
         // Upload to Spring Boot
         setControlledRecordingState("UPLOADING")
         console.log("[NEUROLENS] UPLOADING VIDEO")
@@ -854,11 +893,11 @@ export function ARView() {
         formData.append("video", recordedBlob, `recording_${person.id}_${Date.now()}.webm`)
         formData.append("clientId", "client_001")
         formData.append("personId", person.id)
-        formData.append("duration", "15")
+        formData.append("duration", "7")
         formData.append("personName", person.name)
         formData.append("relationship", person.relationship)
-        formData.append("title", `First interaction with ${person.name}`)
-        formData.append("description", `First interaction recording captured on ${new Date().toLocaleString()}`)
+        formData.append("title", `Interaction with ${person.name}`)
+        formData.append("description", `7-second interaction recording captured on ${new Date().toLocaleString()}`)
 
         try {
           const res = await uploadRecordedMemory(formData)
@@ -873,11 +912,36 @@ export function ARView() {
           // Mark person encounter as recorded
           recordedPersonIdsRef.current.add(person.id)
 
-          // Refresh person profile from backend to fetch the newly created real memory
+          // Replace temporary memory with persisted memory, keeping local blob URL as reliable backup
+          const persistedMemory = mapMemoryResponse(res, 0)
+          persistedMemory.video = resolveMediaUrl(res.videoUrl) || localVideoUrl
+
+          setMatchedPerson((prev) => {
+            if (!prev) return prev
+            const existing = (prev.memories || []).filter((m) => m.id !== immediateMemory.id && m.id !== persistedMemory.id)
+            const updated = {
+              ...prev,
+              memories: [persistedMemory, ...existing],
+            }
+            matchedPersonRef.current = updated
+            return updated
+          })
+
+          window.dispatchEvent(new CustomEvent('neurolens-play-memory', { detail: persistedMemory }))
+
+          // Refresh person profile from backend
           setTimeout(async () => {
             try {
               const updatedPerson = await getRecognizedPerson(person.id)
-              setMatchedPerson(updatedPerson)
+              if (updatedPerson && updatedPerson.memories) {
+                // Ensure the persisted video memory stays present and playable
+                const hasVid = updatedPerson.memories.some((m) => Boolean(m.video))
+                if (!hasVid) {
+                  updatedPerson.memories.unshift(persistedMemory)
+                }
+                matchedPersonRef.current = updatedPerson
+                setMatchedPerson(updatedPerson)
+              }
             } catch (err) {
               console.warn("Could not reload updated person memories:", err)
             }
@@ -888,7 +952,7 @@ export function ARView() {
             setControlledRecordingState("COOLDOWN")
             setTimeout(() => {
               setControlledRecordingState("IDLE")
-            }, 6000)
+            }, 4000)
           }, 3000)
 
         } catch (uploadErr) {
@@ -906,12 +970,12 @@ export function ARView() {
       setControlledRecordingState("RECORDING")
       recorder.start(1000) // collect slice every 1000ms
       console.log(
-        `[NEUROLENS] RECORDING STARTED at ${new Date().toISOString()} | VideoTracks: ${videoTracks.length} | AudioTracks: ${audioTracks.length} | MIME: ${recorder.mimeType}`
+        `[NEUROLENS] 7-SECOND RECORDING STARTED at ${new Date().toISOString()} | VideoTracks: ${videoTracks.length} | AudioTracks: ${audioTracks.length} | MIME: ${recorder.mimeType}`
       )
 
-      // 8. 15-second countdown timer
-      setRecordingCountdown(15)
-      let secondsLeft = 15
+      // 8. 7-second countdown timer
+      setRecordingCountdown(7)
+      let secondsLeft = 7
 
       if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
       countdownIntervalRef.current = setInterval(() => {
@@ -922,13 +986,14 @@ export function ARView() {
         }
       }, 1000)
 
-      // 9. Stop after approximately 15 seconds
+      // 9. Stop after approximately 7 seconds (7000ms)
       if (recordingTimerRef.current) clearTimeout(recordingTimerRef.current)
       recordingTimerRef.current = setTimeout(() => {
         if (recorder.state === "recording") {
+          console.log("[NEUROLENS] 7000ms reached — calling recorder.stop()")
           recorder.stop()
         }
-      }, 15000)
+      }, 7000)
 
     } catch (err) {
       console.error("[NEUROLENS] Failed to start MediaRecorder:", err)
@@ -1053,14 +1118,16 @@ export function ARView() {
                   const memCount = res.person.memories ? res.person.memories.length : 0
                   console.log("[NEUROLENS] EXISTING MEMORY COUNT:", memCount)
 
-                  if (recordingStateRef.current === "IDLE" || recordingStateRef.current === "PERSON_DETECTED") {
+                  if (
+                    recordingStateRef.current === "IDLE" ||
+                    recordingStateRef.current === "PERSON_DETECTED" ||
+                    recordingStateRef.current === "CHECK_EXISTING_MEMORY"
+                  ) {
                     setControlledRecordingState("PERSON_RECOGNIZED")
-                    setControlledRecordingState("PROFILE_LOADED")
-                    setControlledRecordingState("CHECK_EXISTING_MEMORY")
 
-                    // FIRST ENCOUNTER CHECK: ZERO MEMORIES
-                    if (memCount === 0 && !recordedPersonIdsRef.current.has(res.person.id)) {
-                      console.log("[NEUROLENS] FIRST ENCOUNTER DETECTED — INITIATING AUTOMATIC RECORDING")
+                    // When a registered person is recognized and recording should begin:
+                    if (!recordedPersonIdsRef.current.has(res.person.id)) {
+                      console.log("[NEUROLENS] REGISTERED PERSON RECOGNIZED — INITIATING 7-SECOND AUTOMATIC RECORDING")
                       startFirstEncounterRecording(res.person)
                     }
                   }
@@ -1455,7 +1522,7 @@ export function ARView() {
                         AUTOMATIC RECORDING IN PROGRESS
                       </span>
                       <span className="text-sm font-extrabold text-white">
-                        Capturing webcam video + real microphone audio for Memory 001
+                        Capturing webcam video + real microphone audio (7s interaction)
                       </span>
                     </div>
                   </div>
@@ -1487,10 +1554,10 @@ export function ARView() {
                   <CheckCircle2 className="size-5 text-emerald-400" />
                   <div>
                     <span className="text-xs font-black uppercase tracking-wider text-emerald-300 block">
-                      MEMORY 001 CREATED & PERSISTED
+                      7-SECOND INTERACTION SAVED
                     </span>
                     <span className="text-sm font-extrabold text-white">
-                      Interaction successfully stored in Spring Boot and MongoDB!
+                      Memory persisted and loaded in AR and Caregiver timelines!
                     </span>
                   </div>
                 </div>
@@ -1673,13 +1740,26 @@ export function ARView() {
                           : recordingState === "UPLOADING"
                           ? "Uploading real video to Spring Boot..."
                           : recordingState === "SAVED"
-                          ? "Memory 001 persisted successfully!"
+                          ? "7-second interaction memory persisted!"
                           : isFirstEncounter
-                          ? "Zero previous memories. Recording automatic."
+                          ? "First encounter. Recording 7s interaction..."
                           : matchedPerson
                           ? `${existingMemoryCount} recorded memory on file.`
                           : "Waiting for encounter..."}
                       </p>
+                      {matchedPerson && recordingState === "IDLE" && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            recordedPersonIdsRef.current.delete(matchedPerson.id)
+                            startFirstEncounterRecording(matchedPerson)
+                          }}
+                          className="w-full mt-2 py-2 px-3 rounded-xl bg-red-600/80 hover:bg-red-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition shadow-lg cursor-pointer"
+                        >
+                          <Video className="size-3.5" />
+                          <span>Record 7s Interaction</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1724,9 +1804,9 @@ export function ARView() {
                       ) : recordingState === "UPLOADING" ? (
                         <span>Saving to backend...</span>
                       ) : recordingState === "SAVED" ? (
-                        <span>✓ Memory 001 created!</span>
+                        <span>✓ Interaction memory persisted!</span>
                       ) : (
-                        <span>Starting 15-second recording...</span>
+                        <span>Starting 7-second recording...</span>
                       )}
                     </div>
                   </div>

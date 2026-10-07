@@ -28,20 +28,25 @@ export function MemoryTimeline({ memories, onSelectMemory }: MemoryTimelineProps
                 shadow-lg hover:shadow-xl transition-shadow duration-200">
                 
                 {/* Thumbnail */}
-                <div className="relative w-32 h-32 md:w-40 md:h-40 overflow-hidden">
-                  <Image
-                    src={memory.thumbnail || memory.image}
-                    alt={memory.title}
-                    fill
-                    className="object-cover group-hover:scale-110 transition-transform duration-300"
-                  />
-                  
-                  {/* Video indicator */}
-                  {memory.video && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/30 
-                      group-hover:bg-black/40 transition-colors duration-200">
-                      <div className="text-white text-3xl">▶</div>
-                    </div>
+                <div className="relative w-32 h-32 md:w-40 md:h-40 overflow-hidden bg-slate-900">
+                  {memory.video ? (
+                    <>
+                      <video
+                        src={memory.video}
+                        preload="metadata"
+                        className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                      />
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/40 transition-colors duration-200">
+                        <div className="text-white text-3xl">▶</div>
+                      </div>
+                    </>
+                  ) : (
+                    <Image
+                      src={memory.thumbnail && !memory.thumbnail.endsWith('.webm') ? memory.thumbnail : (memory.image || "/placeholder.jpg")}
+                      alt={memory.title}
+                      fill
+                      className="object-cover group-hover:scale-110 transition-transform duration-300"
+                    />
                   )}
                 </div>
 

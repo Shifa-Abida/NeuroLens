@@ -31,20 +31,47 @@ export function MemoryReplayEngine({ memories, scrollModeEnabled = false }: Memo
     }
   }, [])
 
-  // Automatic playback of most relevant / previous memory upon recognition
+  // Listen for newly recorded 7-second memory playback event
+  useEffect(() => {
+    const handlePlayMemory = (e: CustomEvent<Memory>) => {
+      if (e.detail && e.detail.video) {
+        hasAutoPlayedRef.current = e.detail.id || e.detail.title
+        setSelectedMemory(e.detail)
+        reportPlaying(true)
+      }
+    }
+    window.addEventListener('neurolens-play-memory' as any, handlePlayMemory)
+    return () => {
+      window.removeEventListener('neurolens-play-memory' as any, handlePlayMemory)
+    }
+  }, [])
+
+  // Automatic playback of most relevant recorded interaction video upon recognition
   useEffect(() => {
     if (memories && memories.length > 0) {
-      const firstId = memories[0].id || memories[0].title
-      // Only auto-play once per person's memories to not interrupt user navigation
-      if (hasAutoPlayedRef.current !== firstId) {
-        hasAutoPlayedRef.current = firstId
-        setSelectedMemory(memories[0])
+      // Prioritize the latest memory that HAS a real recorded video
+      const memoryWithVideo = memories.find((m) => Boolean(m.video))
+      if (memoryWithVideo) {
+        const targetId = memoryWithVideo.id || memoryWithVideo.title
+        if (hasAutoPlayedRef.current !== targetId) {
+          hasAutoPlayedRef.current = targetId
+          setSelectedMemory(memoryWithVideo)
+          reportPlaying(true)
+        }
       }
     } else {
       setSelectedMemory(null)
       hasAutoPlayedRef.current = null
     }
   }, [memories])
+
+  // Play immediately when selectedMemory has video
+  useEffect(() => {
+    if (selectedMemory?.video && videoRef.current) {
+      videoRef.current.currentTime = 0
+      videoRef.current.play().catch(() => {})
+    }
+  }, [selectedMemory])
 
   // Volume gesture listener (+5% / -5%)
   useEffect(() => {
@@ -209,6 +236,7 @@ export function MemoryReplayEngine({ memories, scrollModeEnabled = false }: Memo
                     controls
                     autoPlay
                     playsInline
+                    loop
                     src={selectedMemory.video}
                     onPlay={() => reportPlaying(true)}
                     onPause={() => reportPlaying(false)}

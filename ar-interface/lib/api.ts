@@ -128,7 +128,7 @@ function formatRealDate(timestamp?: string): string {
   }
 }
 
-function mapMemoryResponse(mem: ApiMemory, index: number): Memory {
+export function mapMemoryResponse(mem: ApiMemory, index: number): Memory {
   const realDate = formatRealDate(mem.createdAt || mem.timestamp)
   const videoSrc = resolveMediaUrl(mem.videoUrl)
 
