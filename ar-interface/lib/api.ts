@@ -150,7 +150,9 @@ export function mapMemoryResponse(mem: ApiMemory, index: number): Memory {
 
 export type RecognizeResponse = {
   matched: boolean
+  matchType?: "REGISTERED" | "EXISTING_UNKNOWN" | "UNKNOWN"
   confidence: number
+  rawDistance?: number
   person?: Person
 }
 
@@ -172,14 +174,53 @@ export async function recognizeFace(embedding: number[]): Promise<RecognizeRespo
     const fullPerson = await getRecognizedPerson(result.person.id)
     return {
       matched: true,
+      matchType: result.matchType || (fullPerson.notes?.includes("visitor") ? "EXISTING_UNKNOWN" : "REGISTERED"),
       confidence: result.confidence,
+      rawDistance: result.rawDistance,
       person: fullPerson
     }
   }
 
   return {
     matched: false,
-    confidence: result.confidence
+    matchType: "UNKNOWN",
+    confidence: result.confidence,
+    rawDistance: result.rawDistance,
+  }
+}
+
+export async function createUnknownVisitor(data: {
+  photo?: string
+  photoUrl?: string
+  faceEmbedding?: number[]
+  notes?: string
+}): Promise<Person> {
+  const response = await fetch(`${API_BASE_URL}/api/persons/unknown-visitor`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      ...data,
+      clientId: "client_001",
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Creating unknown visitor failed: ${response.status}`)
+  }
+
+  const apiPerson: ApiPerson = await response.json()
+  return {
+    id: apiPerson.id || apiPerson.personId || "temp_visitor",
+    name: apiPerson.name || "Unknown Visitor",
+    relationship: apiPerson.relationship || "Visitor",
+    profileImage: resolveMediaUrl(apiPerson.photoUrl || apiPerson.profilePhotoUrl) || "/placeholder-user.jpg",
+    lastMet: "First encounter",
+    lastLocation: "Living Room",
+    tags: ["1 encounter", "Temporary Contact"],
+    memories: [],
+    notes: apiPerson.notes,
   }
 }
 

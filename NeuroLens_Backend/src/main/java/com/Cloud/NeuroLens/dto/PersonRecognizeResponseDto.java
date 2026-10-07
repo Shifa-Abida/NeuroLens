@@ -9,6 +9,8 @@ import lombok.*;
 @Builder
 public class PersonRecognizeResponseDto {
     private boolean matched;
+    private String matchType; // "REGISTERED", "EXISTING_UNKNOWN", "UNKNOWN"
     private double confidence;
+    private double rawDistance;
     private PersonResponseDto person;
 }

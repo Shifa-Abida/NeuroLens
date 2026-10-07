@@ -28,12 +28,20 @@ export function ARVirtualCursor({
 
   // Expose global callback for high-performance direct cursor styling
   useEffect(() => {
-    const handleCursorUpdate = (e: CustomEvent<{ x: number; y: number; hovering: boolean }>) => {
+    const handleCursorUpdate = (e: CustomEvent<{ x: number; y: number; hovering: boolean; visible?: boolean }>) => {
       if (cursorRef.current) {
         cursorRef.current.style.transform = `translate3d(${e.detail.x}px, ${e.detail.y}px, 0)`
       }
       setIsHovering(e.detail.hovering)
-      setVisible(true)
+      if (e.detail.visible !== undefined) {
+        setVisible(e.detail.visible)
+      } else {
+        setVisible(true)
+      }
+    }
+
+    const handleCursorVisibility = (e: CustomEvent<{ visible: boolean }>) => {
+      setVisible(e.detail.visible)
     }
 
     const handleClickPulse = () => {
@@ -42,10 +50,12 @@ export function ARVirtualCursor({
     }
 
     window.addEventListener('neurolens-cursor-move' as any, handleCursorUpdate)
+    window.addEventListener('neurolens-cursor-visibility' as any, handleCursorVisibility)
     window.addEventListener('neurolens-cursor-click' as any, handleClickPulse)
 
     return () => {
       window.removeEventListener('neurolens-cursor-move' as any, handleCursorUpdate)
+      window.removeEventListener('neurolens-cursor-visibility' as any, handleCursorVisibility)
       window.removeEventListener('neurolens-cursor-click' as any, handleClickPulse)
     }
   }, [])

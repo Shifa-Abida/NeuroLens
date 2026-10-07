@@ -3,7 +3,7 @@ import { getGestureRecognizer } from "@/lib/gestureRecognizer"
 import type { GestureType } from "./gestureTypes"
 
 export interface GestureManagerOptions {
-  onCursorMove?: (x: number, y: number, isHovering: boolean) => void
+  onCursorMove?: (x: number, y: number, isHovering: boolean, visible: boolean) => void
   onClick?: (x: number, y: number) => void
   onScrollModeChange?: (enabled: boolean) => void
   onVolumeChange?: (delta: number) => void
@@ -12,6 +12,7 @@ export interface GestureManagerOptions {
     cursorFrozen: boolean
     scrollModeEnabled: boolean
     activeHands: number
+    cursorEnabled: boolean
   }) => void
   isVideoPlaying?: () => boolean
 }
@@ -23,9 +24,21 @@ export class GestureManager {
   // Cursor state
   private cursorX = typeof window !== "undefined" ? window.innerWidth / 2 : 500
   private cursorY = typeof window !== "undefined" ? window.innerHeight / 2 : 400
-  private cursorActive = false
+  private cursorEnabled = false
   private cursorFrozen = false
+
+  // Pinch click state with hysteresis
+  private isPinching = false
   private wasPinching = false
+  private readonly PINCH_START_THRESHOLD = 0.055
+  private readonly PINCH_RELEASE_THRESHOLD = 0.085
+
+  // Gesture activation / deactivation debounce & cooldown
+  private pointingStartTime: number | null = null
+  private openPalmStartTime: number | null = null
+  private lastCursorToggleTime = 0
+  private readonly TOGGLE_HOLD_DURATION = 250 // ms required holding gesture to toggle
+  private readonly TOGGLE_COOLDOWN = 500 // ms cooldown after toggle to prevent bounce
 
   // Scroll state
   private scrollModeEnabled = false
@@ -39,6 +52,7 @@ export class GestureManager {
   private lastReportedGesture: GestureType = "IDLE"
   private lastReportedFrozen = false
   private lastReportedScroll = false
+  private lastReportedEnabled = false
 
   private options: GestureManagerOptions
 
@@ -76,6 +90,8 @@ export class GestureManager {
     if (!result || !result.landmarks || result.landmarks.length === 0) {
       this.twoPalmsStartTime = null
       this.twoPeaceStartTime = null
+      this.pointingStartTime = null
+      this.openPalmStartTime = null
       this.notifyState("IDLE", 0)
       return
     }
@@ -89,7 +105,7 @@ export class GestureManager {
       const category = gestureData?.categoryName || "None"
       const score = gestureData?.score || 0
 
-      // Calculate pinch distance between Thumb tip (4) and Index tip (8)
+      // Calculate 3D pinch distance between Thumb tip (landmark 4) and Index tip (landmark 8)
       const pinchDist = Math.hypot(
         lm[4].x - lm[8].x,
         lm[4].y - lm[8].y,
@@ -172,19 +188,7 @@ export class GestureManager {
     const primary = handInfo[0]
     const isVideoPlaying = this.options.isVideoPlaying ? this.options.isVideoPlaying() : false
 
-    // 1. PINCH DETECTION (Highest priority for selection)
-    if (primary.pinchDist < 0.062) {
-      if (!this.wasPinching) {
-        this.wasPinching = true
-        this.triggerClick()
-      }
-      this.notifyState("PINCH", handCount)
-      return
-    } else if (primary.pinchDist > 0.088) {
-      this.wasPinching = false
-    }
-
-    // 2. VOLUME CONTROLS (Only when memory video is playing)
+    // 1. VOLUME CONTROLS (Only while memory video is actively playing)
     if (isVideoPlaying) {
       if (primary.isThumbUp && now - this.lastVolumeChangeTime > 400) {
         this.lastVolumeChangeTime = now
@@ -199,26 +203,62 @@ export class GestureManager {
       }
     }
 
-    // 3. SINGLE OPEN PALM (Stop cursor movement)
+    // 2. PINCH CLICK (Active when cursor is enabled)
+    if (this.cursorEnabled) {
+      // Hysteresis logic
+      if (primary.pinchDist < this.PINCH_START_THRESHOLD) {
+        this.isPinching = true
+        if (!this.wasPinching) {
+          this.wasPinching = true
+          console.log("[NeuroLens][Gesture] PINCH START")
+          console.log("[NeuroLens][Gesture] PINCH CLICK")
+          this.triggerClick()
+        }
+        this.notifyState("PINCH", handCount)
+        return
+      } else if (primary.pinchDist > this.PINCH_RELEASE_THRESHOLD) {
+        if (this.wasPinching) {
+          console.log("[NeuroLens][Gesture] PINCH RELEASE")
+        }
+        this.isPinching = false
+        this.wasPinching = false
+      }
+    }
+
+    // 3. CURSOR DEACTIVATION GESTURE: SINGLE OPEN PALM
     if (primary.isOpenPalm && handCount === 1) {
+      this.pointingStartTime = null
+
+      if (this.cursorEnabled) {
+        if (!this.openPalmStartTime) {
+          this.openPalmStartTime = now
+        } else if (now - this.openPalmStartTime >= this.TOGGLE_HOLD_DURATION && now - this.lastCursorToggleTime > this.TOGGLE_COOLDOWN) {
+          this.cursorEnabled = false
+          this.cursorFrozen = false
+          this.lastCursorToggleTime = now
+          this.openPalmStartTime = null
+          console.log("[NeuroLens][Cursor] DISABLED")
+          this.options.onCursorMove?.(this.cursorX, this.cursorY, false, false)
+        }
+      }
+
       this.cursorFrozen = true
       this.notifyState("ONE_OPEN_PALM", handCount)
       return
+    } else {
+      this.openPalmStartTime = null
     }
 
-    // 4. ONE INDEX FINGER (Cursor control)
+    // 4. CURSOR ACTIVATION & MOVEMENT: INDEX FINGER POINTING
     if (primary.isPointing) {
-      this.cursorActive = true
-      this.cursorFrozen = false // Unfreezes when pointing resumed
-
-      // Map index fingertip (landmark 8)
-      // Camera is mirrored horizontally with scale-x-[-1]
+      // Map index fingertip (landmark 8) coordinates
       const rawX = primary.lm[8].x
       const rawY = primary.lm[8].y
 
       const screenW = typeof window !== "undefined" ? window.innerWidth : 1920
       const screenH = typeof window !== "undefined" ? window.innerHeight : 1080
 
+      // Mirrored horizontally to match video view (scale-x-[-1])
       const targetX = Math.max(0, Math.min(screenW, (1 - rawX) * screenW))
       const targetY = Math.max(0, Math.min(screenH, rawY * screenH))
 
@@ -227,21 +267,40 @@ export class GestureManager {
       const dy = targetY - this.cursorY
       const dist = Math.hypot(dx, dy)
 
-      if (dist > 1.5) {
+      if (dist > 1.2) {
         const alpha = Math.min(0.65, Math.max(0.35, dist / 160))
         this.cursorX += dx * alpha
         this.cursorY += dy * alpha
       }
 
-      // Check hover target
-      const isHovering = this.checkIsHovering(this.cursorX, this.cursorY)
-      this.options.onCursorMove?.(this.cursorX, this.cursorY, isHovering)
+      // Check if cursor needs activation
+      if (!this.cursorEnabled) {
+        if (!this.pointingStartTime) {
+          this.pointingStartTime = now
+        } else if (now - this.pointingStartTime >= this.TOGGLE_HOLD_DURATION && now - this.lastCursorToggleTime > this.TOGGLE_COOLDOWN) {
+          this.cursorEnabled = true
+          this.cursorFrozen = false
+          this.lastCursorToggleTime = now
+          this.pointingStartTime = null
+          console.log("[NeuroLens][Gesture] Cursor activation gesture detected")
+          console.log("[NeuroLens][Cursor] ENABLED")
+        }
+      } else {
+        this.cursorFrozen = false
+      }
+
+      if (this.cursorEnabled) {
+        const isHovering = this.checkIsHovering(this.cursorX, this.cursorY)
+        this.options.onCursorMove?.(this.cursorX, this.cursorY, isHovering, true)
+      }
 
       this.notifyState("ONE_INDEX", handCount)
       return
+    } else {
+      this.pointingStartTime = null
     }
 
-    // Default when hand is visible but not matched to standard actions
+    // Default when hand is visible but no specific gesture matches
     this.notifyState("IDLE", handCount)
   }
 
@@ -281,30 +340,42 @@ export class GestureManager {
     if (
       this.lastReportedGesture !== gesture ||
       this.lastReportedFrozen !== this.cursorFrozen ||
-      this.lastReportedScroll !== this.scrollModeEnabled
+      this.lastReportedScroll !== this.scrollModeEnabled ||
+      this.lastReportedEnabled !== this.cursorEnabled
     ) {
       this.lastReportedGesture = gesture
       this.lastReportedFrozen = this.cursorFrozen
       this.lastReportedScroll = this.scrollModeEnabled
+      this.lastReportedEnabled = this.cursorEnabled
 
       this.options.onGestureStateChange?.({
         gesture,
         cursorFrozen: this.cursorFrozen,
         scrollModeEnabled: this.scrollModeEnabled,
         activeHands,
+        cursorEnabled: this.cursorEnabled,
       })
     }
   }
 
   public getCursorPosition() {
-    return { x: this.cursorX, y: this.cursorY, frozen: this.cursorFrozen }
+    return { x: this.cursorX, y: this.cursorY, frozen: this.cursorFrozen, enabled: this.cursorEnabled }
   }
 
   public isScrollEnabled() {
     return this.scrollModeEnabled
   }
 
+  public isCursorEnabled() {
+    return this.cursorEnabled
+  }
+
   public setScrollMode(enabled: boolean) {
     this.scrollModeEnabled = enabled
+  }
+
+  public setCursorEnabled(enabled: boolean) {
+    this.cursorEnabled = enabled
+    this.options.onCursorMove?.(this.cursorX, this.cursorY, false, enabled)
   }
 }

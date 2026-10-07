@@ -94,6 +94,52 @@ export async function createPerson(person: Partial<Person>): Promise<Person> {
   return postJson<Person>("/api/persons", person)
 }
 
+export async function updatePerson(id: string, person: Partial<Person>): Promise<Person> {
+  const response = await fetch(`${API_BASE_URL}/api/persons/${id}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(person),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Update person failed: ${response.status}`)
+  }
+
+  return response.json() as Promise<Person>
+}
+
+export async function getTemporaryVisitors(): Promise<Person[]> {
+  return fetchJson<Person[]>("/api/persons/temporary")
+}
+
+export async function promoteTemporaryVisitor(id: string, data: Partial<Person>): Promise<Person> {
+  const response = await fetch(`${API_BASE_URL}/api/persons/${id}/promote`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(data),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Promote temporary visitor failed: ${response.status}`)
+  }
+
+  return response.json() as Promise<Person>
+}
+
+export async function purgeExpiredVisitors(): Promise<{ message: string; purgedCount: number }> {
+  const response = await fetch(`${API_BASE_URL}/api/persons/expired-visitors`, {
+    method: "DELETE",
+  })
+  if (!response.ok) {
+    throw new Error(`Purge expired visitors failed: ${response.status}`)
+  }
+  return response.json()
+}
+
 export async function deletePerson(id: string): Promise<any> {
   const response = await fetch(`${API_BASE_URL}/api/persons/${id}`, {
     method: "DELETE",

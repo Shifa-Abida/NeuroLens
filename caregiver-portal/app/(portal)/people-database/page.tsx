@@ -68,7 +68,8 @@ export default function PeopleDatabasePage() {
     setLoadError(null)
     try {
       const apiPeople = await getPeople()
-      setPeople(apiPeople)
+      const registeredPeople = apiPeople.filter((p) => p.trusted !== false)
+      setPeople(registeredPeople)
 
       // Fetch memory counts for each person
       const counts: Record<string, number> = {}

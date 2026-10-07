@@ -31,6 +31,26 @@ public class MediaStorageService {
         return storeFile(file, "photos", ext);
     }
 
+    public String storeBase64Photo(String base64Data) throws IOException {
+        if (base64Data == null || base64Data.isBlank()) {
+            return null;
+        }
+        String cleaned = base64Data;
+        if (cleaned.contains(",")) {
+            cleaned = cleaned.substring(cleaned.indexOf(",") + 1);
+        }
+        byte[] bytes = java.util.Base64.getDecoder().decode(cleaned);
+        Path targetDir = Paths.get(uploadDir, "photos").toAbsolutePath().normalize();
+        File dir = targetDir.toFile();
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        String uniqueFileName = "visitor_" + UUID.randomUUID().toString() + "_" + System.currentTimeMillis() + ".jpg";
+        Path targetPath = targetDir.resolve(uniqueFileName);
+        Files.write(targetPath, bytes);
+        return "/media/photos/" + uniqueFileName;
+    }
+
     private String storeFile(MultipartFile file, String subDir, String defaultExt) throws IOException {
         if (file == null || file.isEmpty() || file.getSize() <= 0) {
             throw new IllegalArgumentException("Cannot store empty file.");

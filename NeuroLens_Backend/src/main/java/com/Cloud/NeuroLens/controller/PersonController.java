@@ -66,4 +66,29 @@ public class PersonController {
             @RequestBody PersonRecognizeRequestDto request) {
         return personService.recognizePerson(request.getEmbedding());
     }
+
+    @PostMapping("/unknown-visitor")
+    public PersonResponseDto createUnknownVisitor(
+            @RequestBody com.Cloud.NeuroLens.dto.CreateUnknownVisitorRequest request) {
+        return personService.createUnknownVisitor(request);
+    }
+
+    @GetMapping({"/temporary", "/unknown-visitors"})
+    public List<PersonResponseDto> getTemporaryVisitors() {
+        return personService.getTemporaryVisitors();
+    }
+
+    @PutMapping("/{id}/promote")
+    public PersonResponseDto promoteTemporaryVisitor(
+            @PathVariable String id,
+            @RequestBody CreatePersonRequest request) {
+        return personService.promoteTemporaryVisitor(id, request);
+    }
+
+    @DeleteMapping("/expired-visitors")
+    public ResponseEntity<Map<String, Object>> purgeExpiredVisitors() {
+        int purged = personService.purgeExpiredTemporaryVisitors();
+        return ResponseEntity.ok(Map.of("message", "Purged expired temporary visitors", "purgedCount", purged));
+    }
 }
+

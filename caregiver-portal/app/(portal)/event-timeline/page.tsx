@@ -58,7 +58,7 @@ export default function EventTimelinePage() {
 
     void loadData(false)
 
-    // Poll every 5 seconds so newly persisted 7-second AR recordings appear live
+    // Poll every 5 seconds so newly persisted 15-second AR recordings appear live
     const interval = setInterval(() => {
       if (active) {
         void loadData(true)
@@ -100,7 +100,7 @@ export default function EventTimelinePage() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-8">
         <PageHeader
           title="Event Timeline"
-          subtitle="Conversation memories, 7-second interaction recordings, and recognized-person sightings"
+          subtitle="Conversation memories, 15-second interaction recordings, and recognized-person sightings"
         />
         <button
           type="button"
@@ -150,7 +150,7 @@ export default function EventTimelinePage() {
                       {hasVideo && (
                         <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2.5 py-0.5 text-xs font-bold text-red-500 border border-red-500/20">
                           <Video className="size-3" />
-                          {event.duration ? `${event.duration}s recording` : "7s recording"}
+                          {event.duration ? `${event.duration}s recording` : "15s recording"}
                         </span>
                       )}
                     </div>

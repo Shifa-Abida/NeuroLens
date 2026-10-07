@@ -31,7 +31,7 @@ export function MemoryReplayEngine({ memories, scrollModeEnabled = false }: Memo
     }
   }, [])
 
-  // Listen for newly recorded 7-second memory playback event
+  // Listen for newly recorded 15-second memory playback event
   useEffect(() => {
     const handlePlayMemory = (e: CustomEvent<Memory>) => {
       if (e.detail && e.detail.video) {

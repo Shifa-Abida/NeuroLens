@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { MemoryReplayEngine } from './MemoryReplayEngine'
-import { getRecognizedPerson, recognizeFace, registerPerson, saveMemory, summarizeConversation, updatePersonProfile, uploadRecordedMemory, resolveMediaUrl, mapMemoryResponse } from '@/lib/api'
+import { getRecognizedPerson, recognizeFace, registerPerson, createUnknownVisitor, saveMemory, summarizeConversation, updatePersonProfile, uploadRecordedMemory, resolveMediaUrl, mapMemoryResponse } from '@/lib/api'
 import type { Person, Memory } from './types'
 import { Camera, UserPlus, Sparkles, AlertCircle, Scan, Volume2, Heart, MessageSquare, Calendar, Clock, Eye, Wifi, Battery, Shield, User, Video, CheckCircle2, Loader2, Play } from 'lucide-react'
 import { GestureManager } from './gesture/GestureManager'
@@ -86,7 +86,7 @@ export function ARView() {
 
   // Recording State Machine
   const [recordingState, setRecordingState] = useState<RecordingState>("IDLE")
-  const [recordingCountdown, setRecordingCountdown] = useState<number>(7)
+  const [recordingCountdown, setRecordingCountdown] = useState<number>(15)
   const [recordingError, setRecordingError] = useState<string | null>(null)
   const [savedMemoryId, setSavedMemoryId] = useState<string | null>(null)
 
@@ -126,6 +126,15 @@ export function ARView() {
   const lastSeenTimeRef = useRef<number>(0)
   const lastGreetedPersonIdRef = useRef<string | null>(null)
   const currentDescriptorRef = useRef<number[] | null>(null)
+
+  // Encounter tracking refs — exactly ONE recording per encounter.
+  // A new encounter starts only when the person leaves for >6s and returns.
+  const activeEncounterPersonIdRef = useRef<string | null>(null)
+  const encounterRecordedRef = useRef<boolean>(false)
+  const personLastPresentTimeRef = useRef<number>(0)
+  const isRecordingLockRef = useRef<boolean>(false)
+  const unknownFaceFramesRef = useRef<number>(0)
+  const isCapturingUnknownRef = useRef<boolean>(false)
 
   // Update recording state sync ref
   const setControlledRecordingState = (state: RecordingState) => {
@@ -178,9 +187,9 @@ export function ARView() {
   // Initialize GestureManager using existing camera stream & video element
   useEffect(() => {
     const manager = new GestureManager({
-      onCursorMove: (x, y, hovering) => {
+      onCursorMove: (x, y, hovering, visible) => {
         window.dispatchEvent(new CustomEvent('neurolens-cursor-move', {
-          detail: { x, y, hovering }
+          detail: { x, y, hovering, visible }
         }))
       },
       onClick: () => {
@@ -852,17 +861,17 @@ export function ARView() {
           return
         }
 
-        // IMMEDIATELY create a local URL from the real 7-second recorded video blob
+        // IMMEDIATELY create a local URL from the real 15-second recorded video blob
         const localVideoUrl = URL.createObjectURL(recordedBlob)
 
         const immediateMemory: Memory = {
           id: `recording-${person.id}-${Date.now()}`,
           personId: person.id,
-          title: `7s Interaction with ${person.name}`,
+          title: `15s Interaction with ${person.name}`,
           date: "Just now",
           timestamp: new Date().toISOString(),
           location: "Living Room",
-          description: `7-second interaction recording captured on ${new Date().toLocaleTimeString()}`,
+          description: `15-second interaction recording captured on ${new Date().toLocaleTimeString()}`,
           image: "/placeholder.jpg",
           emoji: "🎥",
           emotionalImportance: 10,
@@ -870,7 +879,7 @@ export function ARView() {
           thumbnail: localVideoUrl,
         }
 
-        // Immediately update matchedPerson state so the 7-second video is active in memory
+        // Immediately update matchedPerson state so the 15-second video is active in memory
         setMatchedPerson((prev) => {
           if (!prev) return prev
           const existing = prev.memories || []
@@ -893,11 +902,11 @@ export function ARView() {
         formData.append("video", recordedBlob, `recording_${person.id}_${Date.now()}.webm`)
         formData.append("clientId", "client_001")
         formData.append("personId", person.id)
-        formData.append("duration", "7")
+        formData.append("duration", "15")
         formData.append("personName", person.name)
         formData.append("relationship", person.relationship)
         formData.append("title", `Interaction with ${person.name}`)
-        formData.append("description", `7-second interaction recording captured on ${new Date().toLocaleString()}`)
+        formData.append("description", `15-second interaction recording captured on ${new Date().toLocaleString()}`)
 
         try {
           const res = await uploadRecordedMemory(formData)
@@ -961,21 +970,23 @@ export function ARView() {
           setControlledRecordingState("IDLE")
         } finally {
           activeRecordingPersonIdRef.current = null
+          isRecordingLockRef.current = false
           flushPendingConversationRef.current(true)
         }
       }
 
       // 7. Start recording
       activeRecordingPersonIdRef.current = person.id
+      isRecordingLockRef.current = true
       setControlledRecordingState("RECORDING")
       recorder.start(1000) // collect slice every 1000ms
       console.log(
-        `[NEUROLENS] 7-SECOND RECORDING STARTED at ${new Date().toISOString()} | VideoTracks: ${videoTracks.length} | AudioTracks: ${audioTracks.length} | MIME: ${recorder.mimeType}`
+        `[NEUROLENS] 15-SECOND RECORDING STARTED at ${new Date().toISOString()} | VideoTracks: ${videoTracks.length} | AudioTracks: ${audioTracks.length} | MIME: ${recorder.mimeType}`
       )
 
-      // 8. 7-second countdown timer
-      setRecordingCountdown(7)
-      let secondsLeft = 7
+      // 8. 15-second countdown timer
+      setRecordingCountdown(15)
+      let secondsLeft = 15
 
       if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
       countdownIntervalRef.current = setInterval(() => {
@@ -986,20 +997,21 @@ export function ARView() {
         }
       }, 1000)
 
-      // 9. Stop after approximately 7 seconds (7000ms)
+      // 9. Stop after approximately 15 seconds (15000ms)
       if (recordingTimerRef.current) clearTimeout(recordingTimerRef.current)
       recordingTimerRef.current = setTimeout(() => {
         if (recorder.state === "recording") {
-          console.log("[NEUROLENS] 7000ms reached — calling recorder.stop()")
+          console.log("[NEUROLENS] 15000ms reached — calling recorder.stop()")
           recorder.stop()
         }
-      }, 7000)
+      }, 15000)
 
     } catch (err) {
       console.error("[NEUROLENS] Failed to start MediaRecorder:", err)
       setRecordingError("Failed to start MediaRecorder.")
       setControlledRecordingState("IDLE")
       activeRecordingPersonIdRef.current = null
+      isRecordingLockRef.current = false
       flushPendingConversationRef.current(true)
     }
   }, [])
@@ -1046,8 +1058,15 @@ export function ARView() {
         const resizedDetections = faceapi.resizeResults(detections, displaySize)
 
         if (resizedDetections.length === 0) {
-          // Clear active face target if not seen for 4 seconds
-          if (Date.now() - lastSeenTimeRef.current > 4000) {
+          // Clear active face target if not seen for 6+ seconds — resets encounter
+          const absenceMs = Date.now() - lastSeenTimeRef.current
+          if (absenceMs > 6000) {
+            // Encounter reset: person has been absent >6s
+            if (activeEncounterPersonIdRef.current !== null) {
+              console.log(`[NEUROLENS] ENCOUNTER ENDED — ${activeEncounterPersonIdRef.current} absent for ${Math.round(absenceMs / 1000)}s`)
+              activeEncounterPersonIdRef.current = null
+              encounterRecordedRef.current = false
+            }
             lastGreetedPersonIdRef.current = null
             if (recordingStateRef.current === "IDLE") {
               matchedPersonRef.current = null
@@ -1086,6 +1105,7 @@ export function ARView() {
 
           // Perform Server Recognition Lookups
           const now = Date.now()
+          personLastPresentTimeRef.current = now
           if (!recognitionInProgressRef.current && now - lastRecognizedRef.current > 1500) {
             recognitionInProgressRef.current = true
             lastRecognizedRef.current = now
@@ -1096,7 +1116,22 @@ export function ARView() {
 
             recognizeFace(descriptor)
               .then((res) => {
-                if (res.matched && res.person) {
+                const isRegistered = res.matched && res.person && (res.matchType === "REGISTERED" || (!res.matchType && res.person.relationship !== "Visitor" && !res.person.name.startsWith("Unknown Visitor")))
+                const isExistingUnknown = res.matched && res.person && (res.matchType === "EXISTING_UNKNOWN" || (!res.matchType && (res.person.relationship === "Visitor" || res.person.name.startsWith("Unknown Visitor"))))
+
+                console.log("[NeuroLens][Recognition] Face detected")
+                if (res.person) {
+                  console.log(`[NeuroLens][Recognition] Best candidate = ${res.person.name}`)
+                }
+                if (res.rawDistance !== undefined) {
+                  console.log(`[NeuroLens][Recognition] Raw metric = ${res.rawDistance.toFixed(4)}`)
+                  console.log(`[NeuroLens][Recognition] Threshold = 0.52`)
+                }
+
+                if (isRegistered && res.person) {
+                  unknownFaceFramesRef.current = 0
+                  console.log("[NeuroLens][Recognition] Decision = REGISTERED")
+
                   matchedPersonRef.current = res.person
                   setMatchedPerson(res.person)
                   setIsUnknown(false)
@@ -1114,9 +1149,12 @@ export function ARView() {
                     }
                   }
 
-                  console.log("[NEUROLENS] PERSON RECOGNIZED:", res.person.name)
-                  const memCount = res.person.memories ? res.person.memories.length : 0
-                  console.log("[NEUROLENS] EXISTING MEMORY COUNT:", memCount)
+                  // Encounter-level recording logic for registered person (e.g. Shifa)
+                  if (activeEncounterPersonIdRef.current !== res.person.id) {
+                    console.log(`[NeuroLens] NEW REGISTERED ENCOUNTER started for ${res.person.name} (${res.person.id})`)
+                    activeEncounterPersonIdRef.current = res.person.id
+                    encounterRecordedRef.current = false
+                  }
 
                   if (
                     recordingStateRef.current === "IDLE" ||
@@ -1125,19 +1163,102 @@ export function ARView() {
                   ) {
                     setControlledRecordingState("PERSON_RECOGNIZED")
 
-                    // When a registered person is recognized and recording should begin:
-                    if (!recordedPersonIdsRef.current.has(res.person.id)) {
-                      console.log("[NEUROLENS] REGISTERED PERSON RECOGNIZED — INITIATING 7-SECOND AUTOMATIC RECORDING")
+                    if (!encounterRecordedRef.current && !isRecordingLockRef.current) {
+                      encounterRecordedRef.current = true
+                      console.log("[NeuroLens][Recording] START — 15-second recording for registered person", res.person.name)
+                      startFirstEncounterRecording(res.person)
+                    }
+                  }
+                } else if (isExistingUnknown && res.person) {
+                  unknownFaceFramesRef.current = 0
+                  console.log("[NeuroLens][Recognition] Decision = EXISTING_UNKNOWN")
+                  console.log(`[NeuroLens][Unknown] Existing temporary visitor matched: ${res.person.name}`)
+                  console.log(`[NeuroLens][Unknown] visitCount = ${res.person.tags?.[0] || "returning"}`)
+
+                  matchedPersonRef.current = res.person
+                  setMatchedPerson(res.person)
+                  setIsUnknown(true)
+                  setConfidence(res.confidence)
+
+                  if (lastGreetedPersonIdRef.current !== res.person.id) {
+                    lastGreetedPersonIdRef.current = res.person.id
+                    if ("speechSynthesis" in window) {
+                      window.speechSynthesis.cancel()
+                      window.speechSynthesis.speak(new SpeechSynthesisUtterance(`Visitor recognized: ${res.person.name}.`))
+                    }
+                  }
+
+                  // Returning unknown visitor encounter recording (Part 20)
+                  if (activeEncounterPersonIdRef.current !== res.person.id) {
+                    console.log(`[NeuroLens] RETURNING VISITOR ENCOUNTER started for ${res.person.name} (${res.person.id})`)
+                    activeEncounterPersonIdRef.current = res.person.id
+                    encounterRecordedRef.current = false
+                  }
+
+                  if (
+                    recordingStateRef.current === "IDLE" ||
+                    recordingStateRef.current === "PERSON_DETECTED"
+                  ) {
+                    if (!encounterRecordedRef.current && !isRecordingLockRef.current) {
+                      encounterRecordedRef.current = true
+                      console.log("[NeuroLens][Recording] START — 15-second recording for returning unknown visitor", res.person.name)
                       startFirstEncounterRecording(res.person)
                     }
                   }
                 } else {
+                  console.log("[NeuroLens][Recognition] Decision = UNKNOWN")
+                  console.log("[NeuroLens][Unknown] New visitor detected")
+
                   if (recordingStateRef.current === "IDLE" || recordingStateRef.current === "PERSON_DETECTED") {
                     matchedPersonRef.current = null
                     setMatchedPerson(null)
                     setIsUnknown(true)
                     setConfidence(res.confidence || 10.0)
                     setControlledRecordingState("IDLE")
+                  }
+
+                  // Auto snapshot capture for new unknown visitor
+                  unknownFaceFramesRef.current += 1
+                  if (unknownFaceFramesRef.current >= 2 && !isCapturingUnknownRef.current && video) {
+                    isCapturingUnknownRef.current = true
+                    try {
+                      const snapCanvas = document.createElement("canvas")
+                      snapCanvas.width = 320
+                      snapCanvas.height = 240
+                      const snapCtx = snapCanvas.getContext("2d")
+                      if (snapCtx) {
+                        snapCtx.translate(snapCanvas.width, 0)
+                        snapCtx.scale(-1, 1)
+                        snapCtx.drawImage(video, 0, 0, snapCanvas.width, snapCanvas.height)
+                        const snapshotBase64 = snapCanvas.toDataURL("image/jpeg", 0.85)
+
+                        console.log("[NeuroLens][Unknown] Photo captured from camera stream")
+                        createUnknownVisitor({
+                          photo: snapshotBase64,
+                          faceEmbedding: descriptor,
+                          notes: "Unregistered visitor detected by NeuroLens vision system.",
+                        }).then((createdVisitor) => {
+                          console.log(`[NeuroLens][Unknown] temporaryVisitorId = ${createdVisitor.id}`)
+                          console.log("[NeuroLens][Unknown] Photo persisted to database and caregiver portal")
+                          matchedPersonRef.current = createdVisitor
+                          setMatchedPerson(createdVisitor)
+                          setIsUnknown(true)
+                          activeEncounterPersonIdRef.current = createdVisitor.id
+                          encounterRecordedRef.current = true // First encounter establishes visitor profile
+                          lastGreetedPersonIdRef.current = createdVisitor.id
+                          if ("speechSynthesis" in window) {
+                            window.speechSynthesis.cancel()
+                            window.speechSynthesis.speak(new SpeechSynthesisUtterance("Unregistered visitor detected. Photo saved to caregiver portal."))
+                          }
+                        }).catch((createErr) => {
+                          console.warn("Could not auto-create unknown visitor:", createErr)
+                        })
+                      }
+                    } finally {
+                      setTimeout(() => {
+                        isCapturingUnknownRef.current = false
+                      }, 5000)
+                    }
                   }
                 }
               })
@@ -1365,16 +1486,22 @@ export function ARView() {
             <div className="w-[260px] flex flex-col gap-6 flex-shrink-0 h-full overflow-y-auto scrollbar-none">
               {/* Person Recognized Card */}
               <div className="rounded-3xl bg-slate-900/40 border border-white/10 p-5 shadow-2xl backdrop-blur-xl space-y-5">
-                <div className="flex items-center gap-2 text-[10px] font-bold text-emerald-400 uppercase tracking-widest">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  {matchedPerson ? "Person Recognized" : "System Scanning"}
+                <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest">
+                  <span className={`w-2 h-2 rounded-full ${isUnknown ? "bg-amber-400" : matchedPerson ? "bg-emerald-400" : "bg-blue-400"} animate-pulse`} />
+                  <span className={isUnknown ? "text-amber-400" : matchedPerson ? "text-emerald-400" : "text-blue-400"}>
+                    {isUnknown && matchedPerson
+                      ? "Unknown Visitor"
+                      : matchedPerson
+                      ? "Person Recognized"
+                      : "System Scanning"}
+                  </span>
                 </div>
 
                 {matchedPerson ? (
                   <>
                     <div className="flex items-center gap-4 border-b border-white/5 pb-4">
-                      {/* CAREGIVER-UPLOADED REFERENCE PHOTO */}
-                      <div className="relative size-16 rounded-full overflow-hidden border-2 border-emerald-400/40 bg-slate-950 flex-shrink-0">
+                      {/* REAL CAPTURED OR REGISTERED PHOTO */}
+                      <div className={`relative size-16 rounded-full overflow-hidden border-2 ${isUnknown ? "border-amber-400/50" : "border-emerald-400/40"} bg-slate-950 flex-shrink-0`}>
                         <img
                           src={matchedPerson.profileImage}
                           alt={matchedPerson.name}
@@ -1388,12 +1515,12 @@ export function ARView() {
                         <h2 className="text-xl font-black text-white leading-tight truncate">
                           {matchedPerson.name}
                         </h2>
-                        <div className="mt-1 inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+                        <div className={`mt-1 inline-flex items-center gap-1 text-[10px] font-bold ${isUnknown ? "text-amber-400 border-amber-500/30 bg-amber-500/10" : "text-emerald-400 border-emerald-500/30 bg-emerald-500/10"} border px-2 py-0.5 rounded-full`}>
                           <User className="size-3" />
-                          {matchedPerson.relationship}
+                          {matchedPerson.relationship || (isUnknown ? "Visitor" : "Contact")}
                         </div>
                         <p className="text-[10px] text-slate-400 font-bold mt-1">
-                          Confidence: {confidence}%
+                          Match Score: {confidence}%
                         </p>
                       </div>
                     </div>
@@ -1405,7 +1532,9 @@ export function ARView() {
                           <User className="size-3.5 text-slate-500" />
                           Status
                         </span>
-                        <span className="font-semibold text-emerald-400">Trusted Reference</span>
+                        <span className={`font-semibold ${isUnknown ? "text-amber-400" : "text-emerald-400"}`}>
+                          {isUnknown ? "Temporary Visitor" : "Trusted Reference"}
+                        </span>
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="flex items-center gap-2 text-slate-400">
@@ -1419,12 +1548,16 @@ export function ARView() {
                     </div>
 
                     {/* Dynamic Status Callout */}
-                    <div className="bg-emerald-950/20 border border-emerald-500/20 rounded-2xl p-4 flex gap-3 text-xs leading-relaxed text-slate-300">
-                      <CheckCircle2 className="size-5 text-emerald-400 flex-shrink-0 mt-0.5" />
+                    <div className={`${isUnknown ? "bg-amber-950/20 border-amber-500/20" : "bg-emerald-950/20 border-emerald-500/20"} border rounded-2xl p-4 flex gap-3 text-xs leading-relaxed text-slate-300`}>
+                      <CheckCircle2 className={`size-5 ${isUnknown ? "text-amber-400" : "text-emerald-400"} flex-shrink-0 mt-0.5`} />
                       <div>
-                        <p className="font-bold text-emerald-300 mb-0.5">{matchedPerson.name} Recognized</p>
+                        <p className={`font-bold ${isUnknown ? "text-amber-300" : "text-emerald-300"} mb-0.5`}>
+                          {isUnknown ? "Temporary Visitor Profile" : `${matchedPerson.name} Recognized`}
+                        </p>
                         <p>
-                          {isFirstEncounter
+                          {isUnknown
+                            ? "Unregistered visitor detected. Real photo saved to Caregiver Portal (4-Day retention window)."
+                            : isFirstEncounter
                             ? `First real encounter. Recording webcam & microphone interaction to create Memory 001.`
                             : `Registered ${matchedPerson.relationship.toLowerCase()}. Displaying saved memory interaction.`}
                         </p>
@@ -1522,7 +1655,7 @@ export function ARView() {
                         AUTOMATIC RECORDING IN PROGRESS
                       </span>
                       <span className="text-sm font-extrabold text-white">
-                        Capturing webcam video + real microphone audio (7s interaction)
+                        Capturing webcam video + real microphone audio (15s interaction)
                       </span>
                     </div>
                   </div>
@@ -1554,7 +1687,7 @@ export function ARView() {
                   <CheckCircle2 className="size-5 text-emerald-400" />
                   <div>
                     <span className="text-xs font-black uppercase tracking-wider text-emerald-300 block">
-                      7-SECOND INTERACTION SAVED
+                      15-SECOND INTERACTION SAVED
                     </span>
                     <span className="text-sm font-extrabold text-white">
                       Memory persisted and loaded in AR and Caregiver timelines!
@@ -1740,9 +1873,9 @@ export function ARView() {
                           : recordingState === "UPLOADING"
                           ? "Uploading real video to Spring Boot..."
                           : recordingState === "SAVED"
-                          ? "7-second interaction memory persisted!"
+                          ? "15-second interaction memory persisted!"
                           : isFirstEncounter
-                          ? "First encounter. Recording 7s interaction..."
+                          ? "First encounter. Recording 15s interaction..."
                           : matchedPerson
                           ? `${existingMemoryCount} recorded memory on file.`
                           : "Waiting for encounter..."}
@@ -1752,12 +1885,14 @@ export function ARView() {
                           type="button"
                           onClick={() => {
                             recordedPersonIdsRef.current.delete(matchedPerson.id)
+                            encounterRecordedRef.current = false
+                            isRecordingLockRef.current = false
                             startFirstEncounterRecording(matchedPerson)
                           }}
                           className="w-full mt-2 py-2 px-3 rounded-xl bg-red-600/80 hover:bg-red-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition shadow-lg cursor-pointer"
                         >
                           <Video className="size-3.5" />
-                          <span>Record 7s Interaction</span>
+                          <span>Record 15s Interaction</span>
                         </button>
                       )}
                     </div>

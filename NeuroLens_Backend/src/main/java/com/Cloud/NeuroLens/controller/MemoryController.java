@@ -27,7 +27,7 @@ public class MemoryController {
             @RequestParam(value = "file", required = false) MultipartFile file,
             @RequestParam(value = "clientId", required = false, defaultValue = "client_001") String clientId,
             @RequestParam("personId") String personId,
-            @RequestParam(value = "duration", required = false, defaultValue = "7") Integer duration,
+            @RequestParam(value = "duration", required = false, defaultValue = "15") Integer duration,
             @RequestParam(value = "personName", required = false) String personName,
             @RequestParam(value = "relationship", required = false) String relationship,
             @RequestParam(value = "title", required = false) String title,

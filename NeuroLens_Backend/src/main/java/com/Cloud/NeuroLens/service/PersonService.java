@@ -1,8 +1,9 @@
 package com.Cloud.NeuroLens.service;
 
 import com.Cloud.NeuroLens.dto.CreatePersonRequest;
+import com.Cloud.NeuroLens.dto.CreateUnknownVisitorRequest;
+import com.Cloud.NeuroLens.dto.PersonRecognizeResponseDto;
 import com.Cloud.NeuroLens.dto.PersonResponseDto;
-import com.Cloud.NeuroLens.model.Person;
 
 import java.util.List;
 
@@ -18,5 +19,13 @@ public interface PersonService {
 
     void deletePerson(String id);
 
-    com.Cloud.NeuroLens.dto.PersonRecognizeResponseDto recognizePerson(List<Double> embedding);
+    PersonRecognizeResponseDto recognizePerson(List<Double> embedding);
+
+    PersonResponseDto createUnknownVisitor(CreateUnknownVisitorRequest request);
+
+    List<PersonResponseDto> getTemporaryVisitors();
+
+    PersonResponseDto promoteTemporaryVisitor(String id, CreatePersonRequest request);
+
+    int purgeExpiredTemporaryVisitors();
 }
