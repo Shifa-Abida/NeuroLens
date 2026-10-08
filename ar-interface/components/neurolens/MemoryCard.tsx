@@ -73,7 +73,7 @@ export function MemoryCard({ memory, onClose }: MemoryCardProps) {
                 controls
                 controlsList="nodownload"
               >
-                <source src={memory.video} type="video/mp4" />
+                <source src={memory.video} />
                 Your browser does not support the video tag.
               </video>
             ) : (

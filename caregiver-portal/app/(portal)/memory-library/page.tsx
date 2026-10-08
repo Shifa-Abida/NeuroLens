@@ -9,6 +9,7 @@ export default function MemoryLibraryPage() {
   const [memories, setMemories] = useState<Memory[]>([])
   const [peopleMap, setPeopleMap] = useState<Record<string, Person>>({})
   const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [activeMemory, setActiveMemory] = useState<Memory | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
@@ -17,7 +18,7 @@ export default function MemoryLibraryPage() {
     try {
       const [peopleList, mems] = await Promise.all([
         getPeople().catch(() => [] as Person[]),
-        getAllMemories().catch(() => [] as Memory[])
+        getAllMemories(),
       ])
 
       const pMap: Record<string, Person> = {}
@@ -26,9 +27,10 @@ export default function MemoryLibraryPage() {
       })
       setPeopleMap(pMap)
       setMemories(mems)
+      setLoadError(false)
     } catch (err) {
       console.error("Failed to load memories from backend:", err)
-      setMemories([])
+      setLoadError(true)
     } finally {
       setIsLoading(false)
     }
@@ -84,6 +86,10 @@ export default function MemoryLibraryPage() {
         <div className="rounded-3xl bg-card p-12 text-center shadow-sm ring-1 ring-border/60 flex flex-col items-center justify-center space-y-3">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
           <p className="text-sm text-muted-foreground">Loading memories from backend...</p>
+        </div>
+      ) : loadError ? (
+        <div role="alert" className="rounded-3xl bg-card p-12 text-center shadow-sm ring-1 ring-border/60">
+          <p className="text-sm text-destructive">Memories could not be loaded from the backend. Refresh the page to try again.</p>
         </div>
       ) : memories.length === 0 ? (
         <div className="rounded-3xl bg-card p-12 text-center shadow-sm ring-1 border border-dashed border-border/80 space-y-4">

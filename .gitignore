@@ -11,6 +11,8 @@ Desktop.ini
 # Environment / secret files — NEVER commit
 .env
 .env.*
+!.env.example
+!.env.local.example
 .env.local
 .env.production
 *.env
@@ -29,3 +31,28 @@ target/
 
 # Logs
 *.log
+logs/
+
+# Local H2 / DB files
+NeuroLens_Backend/data/*.mv.db
+NeuroLens_Backend/data/*.trace.db
+NeuroLens_Backend/data/*.db
+
+# Local media / recordings / generated files
+*.webm
+*.mp4
+*.mov
+
+# Build / coverage
+build/
+dist/
+coverage/
+
+# Secrets / keys
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks

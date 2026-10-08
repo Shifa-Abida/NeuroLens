@@ -15,6 +15,7 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -73,8 +74,41 @@ public class MemoryServiceImpl implements MemoryService {
             throw new IllegalArgumentException("RECORDING FAILED: EMPTY VIDEO BLOB");
         }
 
-        Person person = personRepository.findById(personId)
-                .orElseThrow(() -> new ResourceNotFoundException("Person not found with id: " + personId));
+        Person person = null;
+        if (personId != null && !personId.isBlank() && !"undefined".equalsIgnoreCase(personId) && !"null".equalsIgnoreCase(personId)) {
+            person = personRepository.findById(personId).orElse(null);
+        }
+        if (person == null && personName != null && !personName.isBlank()) {
+            person = personRepository.findByName(personName.trim()).orElse(null);
+        }
+        if (person == null) {
+            String pName = personName != null && !personName.isBlank() ? personName.trim() : "Recognized Contact";
+            String rel = relationship != null && !relationship.isBlank() ? relationship.trim() : "Family Member";
+            try {
+                Person newPerson = Person.builder()
+                        .clientId(clientId != null && !clientId.isBlank() ? clientId : "client_001")
+                        .name(pName)
+                        .relationship(rel)
+                        .trusted(true)
+                        .memoryIds(new ArrayList<>())
+                        .conversationIds(new ArrayList<>())
+                        .faceEmbeddings(new ArrayList<>())
+                        .faceSnapshots(new ArrayList<>())
+                        .firstSeen(LocalDateTime.now().toString())
+                        .lastSeen(LocalDateTime.now().toString())
+                        .timesSeen(1)
+                        .createdAt(LocalDateTime.now().toString())
+                        .updatedAt(LocalDateTime.now().toString())
+                        .build();
+                person = personRepository.save(newPerson);
+            } catch (Exception ex) {
+                throw new IllegalStateException("Could not create a person record for the uploaded memory.", ex);
+            }
+        }
+
+        if (person == null || person.getId() == null || person.getId().isBlank()) {
+            throw new IllegalArgumentException("A valid person record is required to persist this memory.");
+        }
 
         // 1. Physically persist the actual video file in configured media storage
         String videoUrl = mediaStorageService.storeVideo(video);
@@ -85,9 +119,10 @@ public class MemoryServiceImpl implements MemoryService {
         String rel = relationship != null && !relationship.isBlank() ? relationship : person.getRelationship();
         String memoryTitle = title != null && !title.isBlank() ? title : "First interaction with " + pName;
         String memoryDesc = description != null && !description.isBlank() ? description : "Real interaction recorded on " + now;
-
         Memory memory = Memory.builder()
-                .clientId(clientId != null && !clientId.isBlank() ? clientId : (person.getClientId() != null ? person.getClientId() : "client_001"))
+                .clientId(person.getClientId() != null && !person.getClientId().isBlank()
+                        ? person.getClientId()
+                        : (clientId != null && !clientId.isBlank() ? clientId : "client_001"))
                 .personId(person.getId())
                 .personName(pName)
                 .relationship(rel)
@@ -104,25 +139,49 @@ public class MemoryServiceImpl implements MemoryService {
 
         Memory saved = memoryRepository.save(memory);
 
-        // 3. Update person memory references
-        if (person.getMemoryIds() == null) {
-            person.setMemoryIds(new ArrayList<>());
+        // 3. Update person memory references (safely, never fail the upload)
+        try {
+            if (person != null && person.getId() != null) {
+                personRepository.findById(person.getId()).ifPresent(freshPerson -> {
+                    if (freshPerson.getMemoryIds() == null) {
+                        freshPerson.setMemoryIds(new ArrayList<>());
+                    }
+                    if (!freshPerson.getMemoryIds().contains(saved.getId())) {
+                        freshPerson.getMemoryIds().add(saved.getId());
+                    }
+                    freshPerson.setLastSeen(now.toString());
+                    personRepository.save(freshPerson);
+                });
+            }
+        } catch (Exception ex) {
+            System.err.println("[NEUROLENS] Notice: updating person memoryIds: " + ex.getMessage());
         }
-        if (!person.getMemoryIds().contains(saved.getId())) {
-            person.getMemoryIds().add(saved.getId());
-        }
-        person.setLastSeen(now.toString());
-        personRepository.save(person);
 
         return mapToDto(saved);
     }
 
     @Override
     public List<MemoryResponseDto> getMemoriesByPersonId(String personId) {
-        return memoryRepository.findByPersonIdOrderByTimestampDesc(personId)
+        List<MemoryResponseDto> list = memoryRepository.findByPersonIdOrderByTimestampDesc(personId)
                 .stream()
                 .map(this::mapToDto)
                 .toList();
+        if (!list.isEmpty()) {
+            return list;
+        }
+
+        // Fallback: Check if personId is a name or maps to a person with another id
+        Optional<Person> personOpt = personRepository.findById(personId);
+        if (personOpt.isEmpty()) {
+            personOpt = personRepository.findByName(personId);
+        }
+        if (personOpt.isPresent()) {
+            return memoryRepository.findByPersonIdOrderByTimestampDesc(personOpt.get().getId())
+                    .stream()
+                    .map(this::mapToDto)
+                    .toList();
+        }
+        return list;
     }
 
     @Override

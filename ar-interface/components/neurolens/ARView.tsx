@@ -923,18 +923,25 @@ export function ARView() {
         setControlledRecordingState("UPLOADING")
         console.log("[NEUROLENS][PIPELINE] UPLOADING VIDEO to backend...")
 
+        const effectivePersonId = person.id
+        const effectivePersonName = person.name
+        const effectiveRelationship = person.relationship
+
         const formData = new FormData()
-        formData.append("video", recordedBlob, `recording_${person.id}_${Date.now()}.webm`)
+        formData.append("video", recordedBlob, `recording_${effectivePersonId}_${Date.now()}.webm`)
         formData.append("clientId", "client_001")
-        formData.append("personId", person.id)
+        formData.append("personId", effectivePersonId)
         formData.append("duration", "15")
-        formData.append("personName", person.name)
-        formData.append("relationship", person.relationship)
-        formData.append("title", `Interaction with ${person.name}`)
+        formData.append("personName", effectivePersonName)
+        formData.append("relationship", effectiveRelationship)
+        formData.append("title", `Interaction with ${effectivePersonName}`)
         formData.append("description", `15-second interaction recording captured on ${new Date().toLocaleString()}`)
 
         try {
           const res = await uploadRecordedMemory(formData)
+          if (!(res.id || res.memoryId) || !res.videoUrl) {
+            throw new Error("Backend response did not include a persisted memory ID and video URL.")
+          }
           console.log("[NEUROLENS][PIPELINE] UPLOAD SUCCESS")
           console.log("[NEUROLENS][PIPELINE] BACKEND VIDEO URL:", res.videoUrl)
           console.log("[NEUROLENS][PIPELINE] BACKEND MEMORY ID:", res.id || res.memoryId)
@@ -945,10 +952,9 @@ export function ARView() {
 
           // Replace temporary memory with persisted memory
           const persistedMemory = mapMemoryResponse(res, 0)
-          // Use backend URL as primary, blob URL as fallback
           const resolvedBackendUrl = resolveMediaUrl(res.videoUrl)
-          persistedMemory.video = resolvedBackendUrl || localVideoUrl
-          persistedMemory.thumbnail = resolvedBackendUrl || localVideoUrl
+          persistedMemory.video = resolvedBackendUrl
+          persistedMemory.thumbnail = resolvedBackendUrl
 
           console.log("[NEUROLENS][PIPELINE] Persisted memory video URL:", persistedMemory.video)
 
@@ -967,14 +973,15 @@ export function ARView() {
 
           // Refresh person profile from backend — preserve video memory even if backend
           // fetch doesn't return a resolved videoUrl
+          const lookupId = res.personId || effectivePersonId
           setTimeout(async () => {
             try {
-              const updatedPerson = await getRecognizedPerson(person.id)
-              if (updatedPerson && updatedPerson.memories) {
+              const updatedPerson = await getRecognizedPerson(lookupId)
+              if (updatedPerson) {
+                const currentMems = updatedPerson.memories || []
                 // Ensure every memory that has a videoUrl gets it properly resolved
-                const enrichedMemories = updatedPerson.memories.map((m) => {
+                const enrichedMemories = currentMems.map((m) => {
                   if (m.video) return m
-                  // Check if this is the persisted memory by ID match
                   if (m.id === persistedMemory.id || m.id === (res.id || res.memoryId)) {
                     return { ...m, video: persistedMemory.video, thumbnail: persistedMemory.thumbnail }
                   }
@@ -1004,13 +1011,23 @@ export function ARView() {
               setControlledRecordingState("IDLE")
               isRecordingLockRef.current = false
               console.log("[NEUROLENS][PIPELINE] Recording workflow COMPLETE — lock released, state IDLE")
-              console.log("[NEUROLENS][PIPELINE] Person", person.id, "remains in recordedPersonIdsRef — will NOT re-record")
+              console.log("[NEUROLENS][PIPELINE] Person", effectivePersonId, "remains in recordedPersonIdsRef — will NOT re-record")
             }, 4000)
           }, 3000)
 
-        } catch (uploadErr) {
+        } catch (uploadErr: any) {
+          const detail = uploadErr?.message || String(uploadErr)
           console.error("[NEUROLENS][PIPELINE] Memory upload failed:", uploadErr)
-          setRecordingError("Memory upload to backend failed.")
+          setRecordingError(`Memory upload to backend failed: ${detail}`)
+          setMatchedPerson((prev) => {
+            if (!prev) return prev
+            const updated = {
+              ...prev,
+              memories: (prev.memories || []).filter((memory) => memory.id !== immediateMemory.id),
+            }
+            matchedPersonRef.current = updated
+            return updated
+          })
           // Keep person in recordedPersonIdsRef so it won't retrigger
           // The video was recorded, upload just failed — don't loop
           activeRecordingPersonIdRef.current = null

@@ -34,7 +34,7 @@ export default function EventTimelinePage() {
     try {
       const [registeredPeople, registeredMemories] = await Promise.all([
         getPeople().catch(() => [] as Person[]),
-        getAllMemories().catch(() => [] as Memory[]),
+        getAllMemories(),
       ])
       const results = await Promise.all(
         registeredPeople.map((person) => getSightings(person.id).catch(() => [] as Sighting[])),
@@ -115,7 +115,7 @@ export default function EventTimelinePage() {
 
       <div className="rounded-3xl bg-card p-6 shadow-sm ring-1 ring-border/60 sm:p-8">
         {loadError ? (
-          <p role="alert" className="text-sm text-destructive">Encounter events could not be loaded from the backend.</p>
+          <p role="alert" className="text-sm text-destructive">Memories and encounter events could not be loaded from the backend.</p>
         ) : isLoading ? (
           <div className="flex items-center justify-center gap-3 py-12 text-muted-foreground">
             <Loader2 className="size-5 animate-spin" />

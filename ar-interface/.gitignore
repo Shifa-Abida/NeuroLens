@@ -9,6 +9,7 @@ __v0_jsx-dev-runtime.ts
 # Environment variables — never commit secrets
 .env
 .env.*
+!.env.local.example
 .env*.local
 *.env
 

@@ -16,6 +16,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping({"/api/memories", "/api/memory"})
+@CrossOrigin(origins = {"http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://127.0.0.1:3000", "http://127.0.0.1:3001", "http://127.0.0.1:3002"})
 @RequiredArgsConstructor
 public class MemoryController {
 
@@ -26,7 +27,8 @@ public class MemoryController {
             @RequestParam(value = "video", required = false) MultipartFile video,
             @RequestParam(value = "file", required = false) MultipartFile file,
             @RequestParam(value = "clientId", required = false, defaultValue = "client_001") String clientId,
-            @RequestParam("personId") String personId,
+            @RequestParam(value = "personId", required = false) String personId,
+            @RequestParam(value = "person_id", required = false) String personIdAlt,
             @RequestParam(value = "duration", required = false, defaultValue = "15") Integer duration,
             @RequestParam(value = "personName", required = false) String personName,
             @RequestParam(value = "relationship", required = false) String relationship,
@@ -34,10 +36,11 @@ public class MemoryController {
             @RequestParam(value = "description", required = false) String description) throws IOException {
 
         MultipartFile targetFile = video != null ? video : file;
+        String resolvedPersonId = personId != null && !personId.isBlank() ? personId : personIdAlt;
         return memoryService.saveUploadedMemory(
                 targetFile,
                 clientId,
-                personId,
+                resolvedPersonId,
                 duration,
                 personName,
                 relationship,
