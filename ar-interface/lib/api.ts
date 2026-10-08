@@ -1,7 +1,8 @@
 import type { Memory, Person } from "@/components/neurolens/types"
+import type { SafetyAlertCategory, SafetyAlertSeverity } from "./safety-alerts"
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8080"
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8080"
 
 export type ApiPerson = {
   id: string
@@ -41,6 +42,16 @@ export type ApiMemory = {
 export type ConversationSummary = {
   summary: string
   emotion: string
+}
+
+export type SafetyAlertRequest = {
+  clientId: string
+  personId: string
+  personName: string
+  category: SafetyAlertCategory
+  severity: SafetyAlertSeverity
+  matchedPhrase: string
+  triggerText: string
 }
 
 export function resolveMediaUrl(url?: string): string {
@@ -233,6 +244,22 @@ export async function uploadRecordedMemory(formData: FormData): Promise<ApiMemor
   if (!response.ok) {
     const errText = await response.text().catch(() => "")
     throw new Error(`Upload failed (${response.status}): ${errText}`)
+  }
+
+  return response.json()
+}
+
+export async function createSafetyAlert(data: SafetyAlertRequest): Promise<any> {
+  const response = await fetch(`${API_BASE_URL}/api/alerts`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(data),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Safety alert failed: ${response.status}`)
   }
 
   return response.json()

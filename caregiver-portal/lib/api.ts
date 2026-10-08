@@ -1,5 +1,5 @@
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8080"
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8080"
 
 export type Person = {
   id: string
@@ -52,6 +52,21 @@ export type Sighting = {
   sceneSnapshot?: string
   timestamp?: string
   location?: string
+}
+
+export type SafetyAlert = {
+  alertId: string
+  clientId: string
+  personId: string
+  personName: string
+  category: string
+  severity: string
+  matchedPhrase: string
+  triggerText: string
+  timestamp: string
+  status: "ACTIVE" | "IGNORED"
+  ignoredBy?: string
+  ignoredAt?: string
 }
 
 async function fetchJson<T>(path: string): Promise<T> {
@@ -192,6 +207,31 @@ export async function getEmotionLogs(personId: string): Promise<EmotionLog[]> {
 
 export async function getSightings(personId: string): Promise<Sighting[]> {
   return fetchJson<Sighting[]>(`/api/sightings/person/${personId}`)
+}
+
+export async function getSafetyAlerts(status = "ACTIVE"): Promise<SafetyAlert[]> {
+  return fetchJson<SafetyAlert[]>(`/api/alerts?status=${encodeURIComponent(status)}`)
+}
+
+export async function ignoreSafetyAlert(alertId: string): Promise<SafetyAlert> {
+  const response = await fetch(`${API_BASE_URL}/api/alerts/${alertId}/ignore`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ ignoredBy: "caregiver" }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Ignore alert failed: ${response.status}`)
+  }
+
+  return response.json() as Promise<SafetyAlert>
+}
+
+export function getAlertWebSocketUrl(): string {
+  const wsBase = API_BASE_URL.replace(/^http:/, "ws:").replace(/^https:/, "wss:")
+  return `${wsBase}/ws/alerts`
 }
 
 export function resolveMediaUrl(url?: string): string {

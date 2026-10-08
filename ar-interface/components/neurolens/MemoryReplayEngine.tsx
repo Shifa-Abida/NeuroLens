@@ -7,14 +7,22 @@ import { MapPin, X, Play, Video } from 'lucide-react'
 interface MemoryReplayEngineProps {
   memories: Memory[]
   scrollModeEnabled?: boolean
+  previewMemory?: Memory | null
+  onPreviewEnded?: () => void
 }
 
-export function MemoryReplayEngine({ memories, scrollModeEnabled = false }: MemoryReplayEngineProps) {
+export function MemoryReplayEngine({
+  memories,
+  scrollModeEnabled = false,
+  previewMemory = null,
+  onPreviewEnded,
+}: MemoryReplayEngineProps) {
   const [selectedMemory, setSelectedMemory] = useState<Memory | null>(null)
   const [internalScrollMode, setInternalScrollMode] = useState(scrollModeEnabled)
   const videoRef = useRef<HTMLVideoElement>(null)
   const timelineContainerRef = useRef<HTMLDivElement>(null)
   const hasAutoPlayedRef = useRef<string | null>(null)
+  const activePreviewMemoryIdRef = useRef<string | null>(null)
 
   // Sync scrollMode prop or custom event
   useEffect(() => {
@@ -31,6 +39,16 @@ export function MemoryReplayEngine({ memories, scrollModeEnabled = false }: Memo
     }
   }, [])
 
+  useEffect(() => {
+    if (previewMemory?.video) {
+      const targetId = previewMemory.id || previewMemory.title
+      activePreviewMemoryIdRef.current = targetId
+      hasAutoPlayedRef.current = targetId
+      setSelectedMemory(previewMemory)
+      reportPlaying(true)
+    }
+  }, [previewMemory])
+
   // Listen for newly recorded 15-second memory playback event
   useEffect(() => {
     const handlePlayMemory = (e: CustomEvent<Memory>) => {
@@ -46,20 +64,8 @@ export function MemoryReplayEngine({ memories, scrollModeEnabled = false }: Memo
     }
   }, [])
 
-  // Automatic playback of most relevant recorded interaction video upon recognition
   useEffect(() => {
-    if (memories && memories.length > 0) {
-      // Prioritize the latest memory that HAS a real recorded video
-      const memoryWithVideo = memories.find((m) => Boolean(m.video))
-      if (memoryWithVideo) {
-        const targetId = memoryWithVideo.id || memoryWithVideo.title
-        if (hasAutoPlayedRef.current !== targetId) {
-          hasAutoPlayedRef.current = targetId
-          setSelectedMemory(memoryWithVideo)
-          reportPlaying(true)
-        }
-      }
-    } else {
+    if (!memories || memories.length === 0) {
       setSelectedMemory(null)
       hasAutoPlayedRef.current = null
     }
@@ -69,7 +75,9 @@ export function MemoryReplayEngine({ memories, scrollModeEnabled = false }: Memo
   useEffect(() => {
     if (selectedMemory?.video && videoRef.current) {
       videoRef.current.currentTime = 0
-      videoRef.current.play().catch(() => {})
+      videoRef.current.play().catch(() => {
+        finishPreviewIfActive(selectedMemory)
+      })
     }
   }, [selectedMemory])
 
@@ -118,6 +126,17 @@ export function MemoryReplayEngine({ memories, scrollModeEnabled = false }: Memo
     window.dispatchEvent(new CustomEvent('neurolens-video-playing', { detail: { isPlaying } }))
   }
 
+  const finishPreviewIfActive = (memory: Memory | null) => {
+    const targetId = memory?.id || memory?.title || null
+    if (!targetId || activePreviewMemoryIdRef.current !== targetId) return false
+
+    activePreviewMemoryIdRef.current = null
+    reportPlaying(false)
+    setSelectedMemory(null)
+    onPreviewEnded?.()
+    return true
+  }
+
   // Guard: if no memories exist, do not render anything
   if (!memories || memories.length === 0) {
     return null
@@ -130,6 +149,8 @@ export function MemoryReplayEngine({ memories, scrollModeEnabled = false }: Memo
     }
     return 0
   })
+  const selectedMemoryId = selectedMemory?.id || selectedMemory?.title || null
+  const isPreviewPlayback = Boolean(selectedMemoryId && activePreviewMemoryIdRef.current === selectedMemoryId)
 
   return (
     <div className="relative flex-grow flex flex-col h-full overflow-hidden">
@@ -217,18 +238,19 @@ export function MemoryReplayEngine({ memories, scrollModeEnabled = false }: Memo
       {selectedMemory && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in duration-200">
           <div className="relative w-full max-w-2xl bg-slate-900/95 border border-white/15 rounded-3xl p-6 shadow-2xl animate-in zoom-in-95 duration-200">
-            {/* Close button */}
-            <button
-              data-clickable="true"
-              onClick={() => {
-                setSelectedMemory(null)
-                reportPlaying(false)
-              }}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-700 p-2 rounded-full transition cursor-pointer border border-white/10"
-              aria-label="Close memory playback"
-            >
-              <X className="size-5" />
-            </button>
+            {!isPreviewPlayback && (
+              <button
+                data-clickable="true"
+                onClick={() => {
+                  setSelectedMemory(null)
+                  reportPlaying(false)
+                }}
+                className="absolute top-4 right-4 text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-700 p-2 rounded-full transition cursor-pointer border border-white/10"
+                aria-label="Close memory playback"
+              >
+                <X className="size-5" />
+              </button>
+            )}
 
             <div className="space-y-4">
               <div>
@@ -253,12 +275,20 @@ export function MemoryReplayEngine({ memories, scrollModeEnabled = false }: Memo
                     controls
                     autoPlay
                     playsInline
-                    loop
                     preload="auto"
                     src={selectedMemory.video}
                     onPlay={() => reportPlaying(true)}
                     onPause={() => reportPlaying(false)}
-                    onEnded={() => reportPlaying(false)}
+                    onEnded={() => {
+                      if (!finishPreviewIfActive(selectedMemory)) {
+                        reportPlaying(false)
+                      }
+                    }}
+                    onError={() => {
+                      if (!finishPreviewIfActive(selectedMemory)) {
+                        reportPlaying(false)
+                      }
+                    }}
                   />
                 </div>
               ) : (

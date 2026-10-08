@@ -2,7 +2,8 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { MemoryReplayEngine } from './MemoryReplayEngine'
-import { getRecognizedPerson, recognizeFace, registerPerson, createUnknownVisitor, saveMemory, summarizeConversation, updatePersonProfile, uploadRecordedMemory, resolveMediaUrl, mapMemoryResponse } from '@/lib/api'
+import { getRecognizedPerson, recognizeFace, registerPerson, createUnknownVisitor, saveMemory, summarizeConversation, updatePersonProfile, uploadRecordedMemory, resolveMediaUrl, mapMemoryResponse, createSafetyAlert } from '@/lib/api'
+import { detectSafetyAlert } from '@/lib/safety-alerts'
 import type { Person, Memory } from './types'
 import { Camera, UserPlus, Sparkles, AlertCircle, Scan, Volume2, Heart, MessageSquare, Calendar, Clock, Eye, Wifi, Battery, Shield, User, Video, CheckCircle2, Loader2, Play } from 'lucide-react'
 import { GestureManager } from './gesture/GestureManager'
@@ -56,6 +57,12 @@ type PendingConversation = {
   transcript: string
 }
 
+type AlertMonitoringTarget = {
+  active: boolean
+  personId: string
+  personName: string
+}
+
 function parseSpokenIntroduction(transcript: string) {
   const introduction = transcript.match(/\b(?:I am|I'm)\s+(.+?)\s*[.!?]*$/i)
   if (!introduction) return null
@@ -89,6 +96,7 @@ export function ARView() {
   const [recordingCountdown, setRecordingCountdown] = useState<number>(15)
   const [recordingError, setRecordingError] = useState<string | null>(null)
   const [savedMemoryId, setSavedMemoryId] = useState<string | null>(null)
+  const [memoryPreviewMemory, setMemoryPreviewMemory] = useState<Memory | null>(null)
 
   // Registration Mode States (for unknown faces detected in frame)
   const [regName, setRegName] = useState("")
@@ -117,6 +125,13 @@ export function ARView() {
   const activeRecordingPersonIdRef = useRef<string | null>(null)
   const saveConversationSummaryRef = useRef<(conversation: PendingConversation) => Promise<void>>(async () => {})
   const flushPendingConversationRef = useRef<(force?: boolean) => void>(() => {})
+  const desktopNotifiedAlertIdsRef = useRef<Set<string>>(new Set())
+  const notificationPermissionRequestedRef = useRef(false)
+  const alertMonitoringTargetRef = useRef<AlertMonitoringTarget>({
+    active: false,
+    personId: "unknown_person",
+    personName: "Unknown Person",
+  })
 
   // Lock refs to prevent race conditions and duplicate recordings
   const recordingStateRef = useRef<RecordingState>("IDLE")
@@ -126,6 +141,8 @@ export function ARView() {
   const lastSeenTimeRef = useRef<number>(0)
   const lastGreetedPersonIdRef = useRef<string | null>(null)
   const currentDescriptorRef = useRef<number[] | null>(null)
+  const memoryPreviewActiveRef = useRef(false)
+  const previewedMemoryPersonIdsRef = useRef<Set<string>>(new Set())
 
   // Encounter tracking refs — exactly ONE recording per encounter.
   // A new encounter starts only when the person leaves for >6s and returns.
@@ -317,6 +334,116 @@ export function ARView() {
     matchedPersonRef.current = matchedPerson
   }, [matchedPerson])
 
+  useEffect(() => {
+    const requestDesktopNotificationPermission = () => {
+      if (!("Notification" in window)) return
+      if (Notification.permission !== "default" || notificationPermissionRequestedRef.current) return
+      notificationPermissionRequestedRef.current = true
+      void Notification.requestPermission()
+    }
+
+    window.addEventListener("pointerdown", requestDesktopNotificationPermission, { once: true })
+    window.addEventListener("keydown", requestDesktopNotificationPermission, { once: true })
+    return () => {
+      window.removeEventListener("pointerdown", requestDesktopNotificationPermission)
+      window.removeEventListener("keydown", requestDesktopNotificationPermission)
+    }
+  }, [])
+
+  const setAlertMonitoringActive = useCallback((person?: Person | null) => {
+    alertMonitoringTargetRef.current = {
+      active: true,
+      personId: person?.id || "unknown_person",
+      personName: person?.name || "Unknown Person",
+    }
+  }, [])
+
+  const setAlertMonitoringInactive = useCallback(() => {
+    alertMonitoringTargetRef.current = {
+      active: false,
+      personId: "unknown_person",
+      personName: "Unknown Person",
+    }
+  }, [])
+
+  const processSafetyAlertTranscript = useCallback((transcript: string) => {
+    if (memoryPreviewActiveRef.current) return
+
+    const monitoringTarget = alertMonitoringTargetRef.current
+    if (!monitoringTarget.active) return
+
+    const detection = detectSafetyAlert(transcript)
+    if (!detection) return
+
+    void createSafetyAlert({
+      clientId: "client_001",
+      personId: monitoringTarget.personId,
+      personName: monitoringTarget.personName,
+      ...detection,
+    })
+      .then((alert) => {
+        if (!("Notification" in window)) return
+
+        const alertId = typeof alert?.alertId === "string"
+          ? alert.alertId
+          : `${monitoringTarget.personId}:${detection.category}:${detection.matchedPhrase}`
+        if (desktopNotifiedAlertIdsRef.current.has(alertId)) return
+        desktopNotifiedAlertIdsRef.current.add(alertId)
+
+        const showNotification = () => {
+          if (Notification.permission !== "granted") return
+          const body = [
+            `Potential safety concern detected during ${monitoringTarget.personName}'s interaction.`,
+            `Matched phrase: "${detection.matchedPhrase}"`,
+          ].join("\n")
+
+          const notification = new Notification("NeuroLens Alert", {
+            body,
+            icon: "/icon-dark-32x32.png",
+          })
+          notification.onclick = () => window.focus()
+        }
+
+        if (Notification.permission === "granted") {
+          showNotification()
+        } else if (Notification.permission === "default" && !notificationPermissionRequestedRef.current) {
+          notificationPermissionRequestedRef.current = true
+          void Notification.requestPermission().then(() => showNotification())
+        }
+      })
+      .catch((alertError) => {
+        console.error("[NEUROLENS][ALERT] Could not send safety alert:", alertError)
+      })
+  }, [])
+
+  const findPreviousVideoMemory = useCallback((person: Person) => {
+    return (person.memories || []).find((memory) => Boolean(memory.video))
+  }, [])
+
+  const handleMemoryPreviewFinished = useCallback(() => {
+    memoryPreviewActiveRef.current = false
+    setMemoryPreviewMemory(null)
+    lastRecognizedRef.current = 0
+    setSystemStatus("Memory complete - detection re-enabled")
+  }, [])
+
+  const startPreviousMemoryPreview = useCallback((person: Person) => {
+    if (previewedMemoryPersonIdsRef.current.has(person.id)) return false
+
+    const previousMemory = findPreviousVideoMemory(person)
+    if (!previousMemory?.video) return false
+
+    previewedMemoryPersonIdsRef.current.add(person.id)
+    memoryPreviewActiveRef.current = true
+    activeEncounterPersonIdRef.current = person.id
+    recognitionInProgressRef.current = false
+    setAlertMonitoringInactive()
+    setSystemStatus(`Playing previous memory for ${person.name}`)
+    setMemoryPreviewMemory(previousMemory)
+
+    return true
+  }, [findPreviousVideoMemory, setAlertMonitoringInactive])
+
   const saveSpokenIntroduction = useCallback(async (transcript: string) => {
     const introduction = parseSpokenIntroduction(transcript)
     if (!introduction || voiceEnrollmentInProgressRef.current) return
@@ -422,6 +549,8 @@ export function ARView() {
         if (!transcript) continue
         setCaptionText(transcript)
         if (result.isFinal) {
+          processSafetyAlertTranscript(transcript)
+
           const recognizedPerson = matchedPersonRef.current
           if (recognizedPerson) {
             const previousConversation = pendingConversationRef.current
@@ -1131,11 +1260,13 @@ export function ARView() {
               const departedPersonId = activeEncounterPersonIdRef.current
               console.log(`[NEUROLENS] ENCOUNTER ENDED — ${departedPersonId} absent for ${Math.round(absenceMs / 1000)}s`)
               activeEncounterPersonIdRef.current = null
+              previewedMemoryPersonIdsRef.current.delete(departedPersonId)
               // Only reset encounterRecordedRef if this person was NOT already recorded in this session!
               if (!recordedPersonIdsRef.current.has(departedPersonId)) {
                 encounterRecordedRef.current = false
               }
             }
+            setAlertMonitoringInactive()
             lastGreetedPersonIdRef.current = null
             if (recordingStateRef.current === "IDLE" && !isRecordingLockRef.current) {
               matchedPersonRef.current = null
@@ -1147,6 +1278,7 @@ export function ARView() {
         } else {
           lastSeenTimeRef.current = Date.now()
           setSystemStatus("Face Detected")
+          setAlertMonitoringActive(matchedPersonRef.current)
 
           const primary = resizedDetections[0]
           const descriptor = Array.from(primary.descriptor) as number[]
@@ -1202,9 +1334,18 @@ export function ARView() {
                   console.log("[NeuroLens][Recognition] Decision = REGISTERED")
 
                   matchedPersonRef.current = res.person
+                  setAlertMonitoringActive(res.person)
                   setMatchedPerson(res.person)
                   setIsUnknown(false)
                   setConfidence(res.confidence)
+
+                  if (startPreviousMemoryPreview(res.person)) {
+                    return
+                  }
+
+                  if (memoryPreviewActiveRef.current) {
+                    return
+                  }
 
                   if (lastGreetedPersonIdRef.current !== res.person.id) {
                     lastGreetedPersonIdRef.current = res.person.id
@@ -1241,12 +1382,17 @@ export function ARView() {
                     }
                   }
                 } else if (isExistingUnknown && res.person) {
+                  if (memoryPreviewActiveRef.current) {
+                    return
+                  }
+
                   unknownFaceFramesRef.current = 0
                   console.log("[NeuroLens][Recognition] Decision = EXISTING_UNKNOWN")
                   console.log(`[NeuroLens][Unknown] Existing temporary visitor matched: ${res.person.name}`)
                   console.log(`[NeuroLens][Unknown] visitCount = ${res.person.tags?.[0] || "returning"}`)
 
                   matchedPersonRef.current = res.person
+                  setAlertMonitoringActive(res.person)
                   setMatchedPerson(res.person)
                   setIsUnknown(true)
                   setConfidence(res.confidence)
@@ -1279,11 +1425,16 @@ export function ARView() {
                     }
                   }
                 } else {
+                  if (memoryPreviewActiveRef.current) {
+                    return
+                  }
+
                   console.log("[NeuroLens][Recognition] Decision = UNKNOWN")
                   console.log("[NeuroLens][Unknown] New visitor detected")
 
                   if (recordingStateRef.current === "IDLE" || recordingStateRef.current === "PERSON_DETECTED") {
                     matchedPersonRef.current = null
+                    setAlertMonitoringActive(null)
                     setMatchedPerson(null)
                     setIsUnknown(true)
                     setConfidence(res.confidence || 10.0)
@@ -1990,6 +2141,8 @@ export function ARView() {
                 <MemoryReplayEngine
                   memories={matchedPerson.memories}
                   scrollModeEnabled={gestureState.scrollModeEnabled}
+                  previewMemory={memoryPreviewMemory}
+                  onPreviewEnded={handleMemoryPreviewFinished}
                 />
               ) : isFirstEncounter ? (
                 /* FIRST ENCOUNTER: 0 PREVIOUS MEMORIES */
